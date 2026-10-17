@@ -49,8 +49,6 @@ The library: the same game once added, with its cloud save status and news.
 2. Open it (or drag it onto Playnite) and restart Playnite when asked.
 3. Sign in to your RomM server when RomMnite asks; the RomMnite theme is selected on first start.
 
-Coming from the RomM Library Importer or an earlier RomMnite build named `RomM_9700aa21-...`: uninstall that add-on first (Add-ons > Extensions). Your settings and data are kept.
-
 # Building
 
 ```
