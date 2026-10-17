@@ -16,11 +16,11 @@
 RomMnite turns [Playnite](https://playnite.link) into a Steam-like home for your [RomM](https://github.com/rommapp/romm) server. One extension, with its own theme included:
 
 - **Library**: your RomM games in Playnite, installed from the server on demand, with a Home page, shelves, a Downloads page and games on several platforms shown once, with a button to switch between versions.
-- **Store**: browse the whole server like a storefront: Home with featured games, Platforms, Genres and Series pages, search, and game pages with screenshots, videos, reviews, compatibility notes and the other versions of each game. It loads in the background, after the library and behind anything you're doing.
-- **Emulators set up for you**: downloaded and configured on first use, fullscreen, with your controller, rendering at your display's resolution where the emulator allows it, and closing with the game.
+- **Store**: browse the whole server like a storefront: Home with featured games, Platforms, Genres and Series pages, search, and game pages with screenshots, videos, reviews, compatibility notes and the other versions of each game.
+- **Emulators set up for you**: downloaded and configured on first use, provided the appropriate files are on your server.
 - **Cloud saves**: synced with RomM before and after each session, while playing, and for every installed game at start-up. Windows games' saves go through [Ludusavi](https://github.com/mtkennerly/ludusavi), downloaded when needed. Progress made offline is kept and uploaded once RomM is back; when both sides changed, the save that loses is kept as a backup.
-- **Achievements**: RetroAchievements through RomM, plus PS3 trophies (RPCS3) and Xbox 360 achievements (Xenia) kept per account, with unlock pop-ups during play.
-- **In-game overlay**: the Home button opens play time, achievements and Resume / Quit over emulated games, and over Windows games running borderless or windowed.
+- **Achievements**: RetroAchievements through RomM, plus PS3 trophies (RPCS3) and Xbox 360 achievements (Xenia) with cloud sync.
+- **In-game overlay**: the Home button opens play time, achievements and Resume / Quit over emulated games, and over Windows games.
 - **Accounts**: several RomM accounts on one PC, each with its own library, saves and achievements.
 
 # Screenshots
