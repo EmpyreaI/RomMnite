@@ -485,3 +485,8 @@ $RECYCLE.BIN/
 
 # Packed extension files
 packed/
+
+# RomMnite: packed extensions and patch files are release assets, not source
+*.pext
+PackingOutput/
+*.patch

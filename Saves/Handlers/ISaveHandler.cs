@@ -51,6 +51,24 @@ namespace RomM.Saves.Handlers
         /// <summary>The ROM's path with Playnite's variables already expanded.</summary>
         public string ContentPath { get; set; }
 
+        /// <summary>
+        /// Where a handler may keep small notes of its own between syncs, such as which save
+        /// folders it has learned belong to a game.
+        /// </summary>
+        public string DataDirectory { get; set; }
+
+        /// <summary>
+        /// When the game's current play session began, if it is running or has just stopped.
+        /// Lets a handler tell which saves the session wrote. Null outside a session.
+        /// </summary>
+        public System.DateTime? SessionStartUtc { get; set; }
+
         public ILogger Logger { get; set; }
+
+        /// <summary>
+        /// Set by a handler that cannot find the save, when it knows why (shown under Cloud
+        /// Saves in place of the general "could not work out where" line).
+        /// </summary>
+        public string Reason { get; set; }
     }
 }

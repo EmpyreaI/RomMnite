@@ -22,5 +22,7 @@ namespace RomM.Models.RomM
         public string LastActive { get; set; }
         [JsonProperty("ra_username")]
         public string RAUsername { get; set; }
+        [JsonProperty("ra_progression")]
+        public Achievements.RomMRAProgression RAProgression { get; set; }
     }
 }

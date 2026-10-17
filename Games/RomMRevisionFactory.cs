@@ -16,8 +16,11 @@ namespace RomM.Games
             if (files == null || files.Count == 0)
                 return null;
 
+            // The shallowest file, a disc's sheet (.cue...) before its tracks (LaunchFiles).
             if (files.Count > 1)
-                return files.OrderBy(f => (f.FullPath ?? string.Empty).Count(c => c == '/')).FirstOrDefault();
+                return files.OrderBy(f => (f.FullPath ?? string.Empty).Count(c => c == '/'))
+                    .ThenBy(f => LaunchFiles.Rank(f.FileName ?? string.Empty))
+                    .FirstOrDefault();
 
             return files.FirstOrDefault();
         }

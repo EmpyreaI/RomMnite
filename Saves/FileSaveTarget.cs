@@ -55,5 +55,11 @@ namespace RomM.Saves
             if (serverUpdatedAtUtc.HasValue)
                 File.SetLastWriteTimeUtc(_path, serverUpdatedAtUtc.Value.ToUniversalTime());
         }
+
+        public override void Clear()
+        {
+            if (File.Exists(_path))
+                File.Delete(_path);
+        }
     }
 }

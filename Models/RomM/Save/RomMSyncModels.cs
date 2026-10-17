@@ -40,6 +40,37 @@ namespace RomM.Models.RomM.Save
 
         [JsonProperty("saves")]
         public List<RomMClientSaveState> Saves { get; set; } = new List<RomMClientSaveState>();
+
+        /// <summary>
+        /// The ROMs this negotiation is about. Keeps the server from listing every save in the
+        /// library when only one game is being synced.
+        /// </summary>
+        [JsonProperty("rom_ids", NullValueHandling = NullValueHandling.Ignore)]
+        public List<int> RomIds { get; set; }
+
+        /// <summary>
+        /// Asks for a server save this device no longer has, even one it synced before. Without
+        /// it the server reads a missing local save as a deliberate deletion and offers nothing,
+        /// so a save lost with a wiped or reinstalled emulator would never come back.
+        /// </summary>
+        [JsonProperty("restore_unlisted")]
+        public bool RestoreUnlisted { get; set; }
+    }
+
+    /// <summary>A save as the server lists it (GET /api/saves); only the fields a restore needs.</summary>
+    public class RomMServerSave
+    {
+        [JsonProperty("id")]
+        public int Id { get; set; }
+
+        [JsonProperty("slot")]
+        public string Slot { get; set; }
+
+        [JsonProperty("emulator")]
+        public string Emulator { get; set; }
+
+        [JsonProperty("updated_at")]
+        public System.DateTime? UpdatedAt { get; set; }
     }
 
     /// <summary>The action the server wants the client to perform for a given save.</summary>

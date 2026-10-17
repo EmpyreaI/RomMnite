@@ -32,6 +32,25 @@ namespace RomM.Saves
         /// </summary>
         public abstract string Slot { get; }
 
+        /// <summary>
+        /// A directory whose changes mean this save may have changed, for uploading while the game
+        /// is still running. Null when the save cannot usefully be watched.
+        /// </summary>
+        public virtual string WatchDirectory => null;
+
+        /// <summary>
+        /// A standing problem with this save worth showing as the game's cloud status in place of
+        /// the usual "Up to date" (for instance, the save tool does not recognise the game). Null
+        /// when there is none. Only meaningful once the save has been looked at.
+        /// </summary>
+        public virtual string StatusHeadline => null;
+
+        /// <summary>The sentence that goes with <see cref="StatusHeadline"/>.</summary>
+        public virtual string StatusDetail => null;
+
+        /// <summary>Where this save lives, in words, for the log.</summary>
+        public virtual string Describe() => FileName;
+
         /// <summary>Whether there is anything locally to report or upload yet.</summary>
         public abstract bool Exists { get; }
 
@@ -60,6 +79,13 @@ namespace RomM.Saves
         /// in sync rather than as a fresh local edit.
         /// </summary>
         public abstract void ApplyDownload(byte[] payload, DateTime? serverUpdatedAtUtc);
+
+        /// <summary>
+        /// Takes the local save away, leaving the game as if never played on this computer: for
+        /// an account that has no save of its own here (see SaveAccounts). Only what this target
+        /// knows to be the game's save is removed; anything else beside it is left alone.
+        /// </summary>
+        public abstract void Clear();
     }
 
     /// <summary>

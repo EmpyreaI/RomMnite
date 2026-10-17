@@ -100,6 +100,24 @@ namespace RomM.Saves.Handlers
             return null;
         }
 
+        /// <summary>
+        /// Cores that write no save files of their own (libretro_saves = "false" in their core
+        /// info), so there is nothing to sync: SAME CDi (MAME's CD-i driver).
+        /// </summary>
+        private static readonly string[] NoSaveCores = { "samecdi" };
+
+        internal static bool CoreWritesNoSaves(string core)
+        {
+            string key = new string((core ?? "").ToLowerInvariant().Where(char.IsLetterOrDigit).ToArray());
+            if (key.EndsWith("libretro", StringComparison.Ordinal))
+                key = key.Substring(0, key.Length - "libretro".Length);
+            return key.Length > 0 && NoSaveCores.Any(c => key.StartsWith(c, StringComparison.Ordinal));
+        }
+
+        /// <summary>Whether a RetroArch game runs on a core that writes no saves.</summary>
+        internal static bool WritesNoSaves(ISaveHandler handler, EmulatorProfile profile) =>
+            handler is RetroArchSaveHandler && CoreWritesNoSaves(ResolveCoreName(profile));
+
         // A quoted core path may contain spaces (RetroArch under "C:\Program Files\..."), so the
         // quoted form has to be matched as its own alternative -- treating the quotes as optional
         // around a run of non-space characters would stop at the first space and name the core

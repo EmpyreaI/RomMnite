@@ -17,5 +17,12 @@ namespace RomM.Models.RomM.Collection
 
         [JsonProperty("is_favorite")]
         public bool IsFavorite { get; set; }
+
+        [JsonProperty("is_public")]
+        public bool IsPublic { get; set; }
+
+        // Whose it is (collections of others that they made public are listed too).
+        [JsonProperty("user_id")]
+        public int? UserId { get; set; }
     }
 }

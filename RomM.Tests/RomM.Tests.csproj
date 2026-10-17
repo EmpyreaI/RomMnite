@@ -62,6 +62,20 @@
     <Compile Include="..\Saves\Handlers\RetroArchConfig.cs" Link="Linked\Saves\Handlers\RetroArchConfig.cs" />
     <Compile Include="..\Saves\Handlers\RetroArchSaveHandler.cs" Link="Linked\Saves\Handlers\RetroArchSaveHandler.cs" />
     <Compile Include="..\Saves\Handlers\SaveHandlerRegistry.cs" Link="Linked\Saves\Handlers\SaveHandlerRegistry.cs" />
+    <Compile Include="..\Saves\Handlers\PpssppSaveHandler.cs" Link="Linked\Saves\Handlers\PpssppSaveHandler.cs" />
+    <Compile Include="..\Saves\Handlers\LearnedFolderSaveHandler.cs" Link="Linked\Saves\Handlers\LearnedFolderSaveHandler.cs" />
+    <Compile Include="..\Saves\Handlers\Rpcs3SaveHandler.cs" Link="Linked\Saves\Handlers\Rpcs3SaveHandler.cs" />
+    <Compile Include="..\Saves\Handlers\XeniaSaveHandler.cs" Link="Linked\Saves\Handlers\XeniaSaveHandler.cs" />
+    <Compile Include="..\Saves\Handlers\Pcsx2SaveHandler.cs" Link="Linked\Saves\Handlers\Pcsx2SaveHandler.cs" />
+    <Compile Include="..\Saves\Handlers\DuckStationSaveHandler.cs" Link="Linked\Saves\Handlers\DuckStationSaveHandler.cs" />
+    <Compile Include="..\Saves\Handlers\DolphinSaveHandler.cs" Link="Linked\Saves\Handlers\DolphinSaveHandler.cs" />
+    <Compile Include="..\Saves\Handlers\DolphinWiiSaveHandler.cs" Link="Linked\Saves\Handlers\DolphinWiiSaveHandler.cs" />
+    <Compile Include="..\Saves\Handlers\FlycastSaveHandler.cs" Link="Linked\Saves\Handlers\FlycastSaveHandler.cs" />
+    <Compile Include="..\Saves\Handlers\EmulatorActiveUser.cs" Link="Linked\Saves\Handlers\EmulatorActiveUser.cs" />
+    <Compile Include="..\Saves\Handlers\LudusaviSaveHandler.cs" Link="Linked\Saves\Handlers\LudusaviSaveHandler.cs" />
+    <Compile Include="..\Saves\LudusaviSaveTarget.cs" Link="Linked\Saves\LudusaviSaveTarget.cs" />
+    <Compile Include="..\Saves\FolderSetSaveTarget.cs" Link="Linked\Saves\FolderSetSaveTarget.cs" />
+    <Compile Include="..\Saves\SaveFolderMap.cs" Link="Linked\Saves\SaveFolderMap.cs" />
   </ItemGroup>
 
   <!-- The version declarations PluginVersionTests compares. Copied rather than read from the

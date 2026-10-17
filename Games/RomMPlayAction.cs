@@ -39,6 +39,17 @@ namespace RomM.Games
             Apply(new GameAction(), emulatorName, emulatorId, emulatorProfileId);
 
         /// <summary>
+        /// Puts the importer's play action first on a game that has none: one added before its
+        /// platform had an emulator, now that it has.
+        /// </summary>
+        public static void AddTo(Game game, string emulatorName, Guid emulatorId, string emulatorProfileId)
+        {
+            if (game.GameActions == null)
+                game.GameActions = new System.Collections.ObjectModel.ObservableCollection<GameAction>();
+            game.GameActions.Insert(0, Build(emulatorName, emulatorId, emulatorProfileId));
+        }
+
+        /// <summary>
         /// Writes the importer's play action onto an existing one, for repointing a game already in
         /// the library. Shares its body with <see cref="Build"/> so the fields the importer owns
         /// cannot drift from a freshly imported action; anything else on the action is left as it

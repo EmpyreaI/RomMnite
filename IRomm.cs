@@ -24,5 +24,17 @@ namespace RomM
         /// </summary>
         Settings.EmulatorMapping MappingFor(Game game);
 
+        /// <summary>The games whose cloud saves are switched off.</summary>
+        Saves.SaveSyncOptOut SaveSyncOff { get; }
+
+        /// <summary>The RomM platform a game is on, by its Playnite platform; null when not known.</summary>
+        Models.RomM.Platform.RomMPlatform KnownPlatformOf(Game game);
+
+        /// <summary>The install locations besides the mappings' own folders (see Downloads.InstallLocations).</summary>
+        System.Collections.Generic.List<string> InstallRoots { get; }
+
+        /// <summary>Sets up emulators; null before Playnite has started.</summary>
+        Setup.EmulatorSetup EmulatorSetup { get; }
+
     }
 }

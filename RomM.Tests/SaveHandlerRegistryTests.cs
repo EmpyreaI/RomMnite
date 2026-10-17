@@ -37,7 +37,19 @@ namespace RomM.Tests
         {
             var registry = new SaveHandlerRegistry();
 
-            Assert.Null(registry.Find(new Emulator { Name = "PCSX2", BuiltInConfigId = "pcsx2" }));
+            // xemu keeps every game's saves in one hard-disk image: deliberately not synced.
+            Assert.Null(registry.Find(new Emulator { Name = "xemu", BuiltInConfigId = "xemu" }));
+        }
+
+        [Theory]
+        [InlineData("azahar", "Azahar")]
+        [InlineData("cemu", "Cemu")]
+        [InlineData("vita3k", "Vita3K")]
+        [InlineData("eden", "Eden")]
+        [InlineData("ruffle", "Ruffle")]
+        public void Find_recognises_the_newer_emulators(string tag, string name)
+        {
+            Assert.Equal(tag, new SaveHandlerRegistry().Find(new Emulator { Name = name, BuiltInConfigId = tag })?.EmulatorTag);
         }
 
         [Fact]

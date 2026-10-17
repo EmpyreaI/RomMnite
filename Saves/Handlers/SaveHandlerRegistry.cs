@@ -16,6 +16,19 @@ namespace RomM.Saves.Handlers
             : this(new ISaveHandler[]
             {
                 new RetroArchSaveHandler(),
+                new PpssppSaveHandler(),
+                new Rpcs3SaveHandler(),
+                new XeniaSaveHandler(),
+                new Pcsx2SaveHandler(),
+                new DuckStationSaveHandler(),
+                new DolphinConsolesSaveHandler(),   // GameCube and Wii
+                new FlycastSaveHandler(),
+                new AzaharSaveHandler(),
+                new CemuSaveHandler(),
+                new Vita3KSaveHandler(),
+                new EdenSaveHandler(),
+                new RuffleSaveHandler(),
+                new LudusaviSaveHandler(),
             })
         {
         }

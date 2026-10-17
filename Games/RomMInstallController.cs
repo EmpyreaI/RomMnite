@@ -39,7 +39,7 @@ namespace RomM.Games
                 return;
             }   
 
-            var dstPath = _gameData.Mapping?.DestinationPathResolved
+            var dstPath = _gameData.InstallRoot ?? _gameData.Mapping?.DestinationPathResolved
                 ?? throw new Exception("Mapped emulator data cannot be found, try removing and re-adding.");
 
             // Install dir mirrors RomM's on-disk layout: folder-based ROMs (nested single / multiple
@@ -65,6 +65,8 @@ namespace RomM.Games
                 ? Path.Combine(installDir, _gameData.FileName + ".zip")
                 : Path.Combine(installDir, _gameData.FileName);
 
+            bool windows = global::RomM.Setup.EmulatorSetup.IsWindowsPlatform(_gameData.Mapping?.RomMPlatform);
+
             var req = new DownloadRequest
             {
                 GameId = Game.Id,
@@ -77,7 +79,8 @@ namespace RomM.Games
                 PathTo7Z = _romM.Settings.PathTo7z,
 
                 DownloadAsArchive = _gameData.DownloadAsArchive,
-                AutoExtract = _gameData.Mapping != null && _gameData.Mapping.AutoExtract,
+                // Windows games are always unpacked: an archive cannot be started.
+                AutoExtract = (_gameData.Mapping != null && _gameData.Mapping.AutoExtract) || windows,
                 // The layout actually being installed, so cancelling a download cleans up the game's
                 // folder when it has one.
                 InstallFlat = flatLayout,
@@ -115,24 +118,19 @@ namespace RomM.Games
                     var supported = GetEmulatorSupportedFileTypes(_gameData);
                     var actualRomFiles = GetRomFiles(installDir, supported);
 
-                    // Prefer .m3u if requested
-                    var useM3u = _gameData.Mapping != null && _gameData.Mapping.UseM3U && supported.Any(x => x.ToLower() == "m3u");
-                    if (useM3u)
-                    {
-                        var m3uFile = actualRomFiles.FirstOrDefault(m =>
-                            m.EndsWith(".m3u", StringComparison.OrdinalIgnoreCase));
-
-                        if (!string.IsNullOrEmpty(m3uFile))
-                        {
-                            roms.Add(new GameRom(Game.Name, m3uFile));
-                            return roms;
-                        }
-                    }
-
-                    // Otherwise add all rom files except m3u (we don’t want duplicates)
-                    foreach (var f in actualRomFiles.Where(f => !f.EndsWith(".m3u", StringComparison.OrdinalIgnoreCase)))
+                    // One file to start where there is one: the .m3u, or the disc's .cue (never its
+                    // tracks), so Play does not ask which file (LaunchFiles).
+                    bool m3uSupported = supported == null || supported.Any(x => string.Equals(x, "m3u", StringComparison.OrdinalIgnoreCase));
+                    foreach (var f in LaunchFiles.Pick(actualRomFiles, m3uSupported, installDir, Game.Name))
                     {
                         roms.Add(new GameRom(Game.Name, f));
+                    }
+
+                    // A Windows game packed without a .com or .bat: its own program.
+                    if (roms.Count == 0 && windows)
+                    {
+                        foreach (var f in PendingUnpack.WindowsLaunchFiles(installDir, supported))
+                            roms.Add(new GameRom(Game.Name, f));
                     }
 
                     return roms;

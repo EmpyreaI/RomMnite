@@ -100,6 +100,20 @@ namespace RomM.Saves
         }
 
         /// <summary>
+        /// The digest <see cref="ZipHexFile"/> would produce for an archive holding exactly these
+        /// files under exactly these entry names. For saves whose archive layout is not simply
+        /// "each folder under its own name" -- a save that is only part of a folder tree.
+        /// </summary>
+        public static string EntriesAsZipHex(IEnumerable<KeyValuePair<string, string>> entryNameToFile)
+        {
+            var entries = new List<KeyValuePair<string, string>>();
+            foreach (var entry in entryNameToFile)
+                entries.Add(new KeyValuePair<string, string>(NormalizeEntryName(entry.Key), Md5HexFile(entry.Value)));
+
+            return Combine(entries);
+        }
+
+        /// <summary>
         /// Zip entry names are '/'-separated by specification. Windows paths are not, so a name
         /// derived from the filesystem has to be normalised here or the digest silently diverges
         /// from what every other client computes for the very same save.

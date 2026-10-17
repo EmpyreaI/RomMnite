@@ -91,6 +91,10 @@ namespace RomM.Models.RomM.Rom
         [JsonProperty("hltb_id")]
         public int? HLTBId { get; set; }
 
+        // The game's Steam app, when the server has matched it on Steam (newer RomM only).
+        [JsonProperty("steam_id")]
+        public int? SteamId { get; set; }
+
         [JsonProperty("platform_id")]
         public int PlatformId { get; set; }
 
@@ -99,6 +103,9 @@ namespace RomM.Models.RomM.Rom
 
         [JsonProperty("platform_name")]
         public string PlatformName { get; set; }
+
+        [JsonProperty("platform_display_name")]
+        public string PlatformDisplayName { get; set; }
 
         [JsonProperty("fs_name")]
         public string FileName { get; set; }
@@ -162,6 +169,14 @@ namespace RomM.Models.RomM.Rom
 
         [JsonProperty("path_cover_large")]
         public string PathCoverL { get; set; }
+
+        // The RetroAchievements set for this rom, shown through SuccessStory.
+        [JsonProperty("merged_ra_metadata")]
+        public Achievements.RomMRAMetadata RAMetadata { get; set; }
+
+        // Screenshots RomM has stored, already prefixed with its resource mount (like path_cover_large).
+        [JsonProperty("merged_screenshots")]
+        public List<string> MergedScreenshots { get; set; }
 
         [JsonProperty("has_cover")]
         public bool HasCover { get; set; }

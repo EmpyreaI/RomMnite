@@ -36,6 +36,25 @@ namespace RomM.Settings
             InitializeComponent();
         }
 
+        // RomMnite's page in a window of its own (also a category of Playnite's Settings window).
+        // Its changes are kept with this dialog's Save, like the rest here.
+        private void Click_OpenRomMnitePage(object sender, RoutedEventArgs e)
+        {
+            e.Handled = true;
+            var model = SettingsViewModel.Instance;
+            var plugin = model?.PlayniteAPI?.Addons?.Plugins?.OfType<global::RomM.RomM>().FirstOrDefault();
+            if (plugin == null)
+                return;
+            var window = model.PlayniteAPI.Dialogs.CreateWindow(new WindowCreationOptions { ShowCloseButton = true, ShowMaximizeButton = false, ShowMinimizeButton = false });
+            window.Title = "RomMnite";
+            window.Width = 720;
+            window.Height = 640;
+            window.Owner = Window.GetWindow(this);
+            window.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+            window.Content = new RomMnitePage(plugin, model) { Margin = new Thickness(10) };
+            window.ShowDialog();
+        }
+
         private void Click_TestConnection(object sender, RoutedEventArgs e)
         {
             SettingsViewModel.Instance.TestConnection(true);

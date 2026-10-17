@@ -2,72 +2,59 @@
 <!-- trunk-ignore(markdownlint/MD041) -->
 <div align="center">
 
-  <img src=".github/resources/isotipo.png" height="180px" width="auto" alt="romm-muos logo">
-    <h3 style="font-size: 25px;">
-    A beautiful, powerful, RomM plugin for Playnite.
-  </h3>
-
-<br>
+  <img src=".github/resources/isotipo.png" height="180px" width="auto" alt="RomMnite logo">
+  <h3 style="font-size: 25px;">RomMnite: a Steam-like Playnite for your RomM server.</h3>
+  <p>Created by Empyreai. Based on the <a href="https://github.com/rommapp/playnite-plugin">RomM Library Importer</a> by The RomM Team.</p>
 
 [![license-badge-img]][license-badge]
 [![release-badge-img]][release-badge]
-[![discord-badge-img]][discord-badge]
 
-<!-- [![wiki-badge-img]][wiki] -->
-
-  </div>
 </div>
 
 # Overview
 
-This plugin allows you to import your RomM library into Playnite. It queries the RomM API to create Playnite library entries for each of your games. Installing a game in Playnite will download it from RomM and store it on your system, allowing you to launch it in your emulator of choice.
+RomMnite turns [Playnite](https://playnite.link) into a Steam-like home for your [RomM](https://github.com/rommapp/romm) server. One extension, with its own theme included:
 
-> [!WARNING]
-> The plugin requires a RomM instance set up with IGDB API credentials, otherwise it won't work. You can find more information on how to generate and set credentials in the [docs](https://docs.romm.app/latest/Getting-Started/Generate-API-Keys/).
+- **Library**: your RomM games in Playnite, installed from the server on demand, with a Home page, shelves, a Downloads page and games on several platforms shown once, with a button to switch between versions.
+- **Store**: browse the whole server like a storefront: Home with featured games, Platforms, Genres and Series pages, search, and game pages with screenshots, videos, reviews, compatibility notes and the other versions of each game. It loads in the background, after the library and behind anything you're doing.
+- **Emulators set up for you**: downloaded and configured on first use, fullscreen, with your controller, rendering at your display's resolution where the emulator allows it, and closing with the game.
+- **Cloud saves**: synced with RomM before and after each session, while playing, and for every installed game at start-up. Windows games' saves go through [Ludusavi](https://github.com/mtkennerly/ludusavi), downloaded when needed. Progress made offline is kept and uploaded once RomM is back; when both sides changed, the save that loses is kept as a backup.
+- **Achievements**: RetroAchievements through RomM, plus PS3 trophies (RPCS3) and Xbox 360 achievements (Xenia) kept per account, with unlock pop-ups during play.
+- **In-game overlay**: the Home button opens play time, achievements and Resume / Quit over emulated games, and over Windows games running borderless or windowed.
+- **Accounts**: several RomM accounts on one PC, each with its own library, saves and achievements.
+
+# Requirements
+
+- Windows with Playnite 10 (Playnite SDK 6.18 or newer).
+- A RomM server, version 4.9 or newer, set up with metadata providers (IGDB at least). See [RomM's docs](https://docs.romm.app/latest/Getting-Started/Generate-API-Keys/).
+- Cloud saves need a RomM version with its device sync API.
 
 # Installation
 
-To install and configure the RomM Playnite plugin, check out the [Installation Guide][docs-installation-guide]
+1. Download the `.pext` file from the [latest release](https://github.com/Empyreai/RomMnite/releases/latest).
+2. Open it (or drag it onto Playnite) and restart Playnite when asked.
+3. Sign in to your RomM server when RomMnite asks; the RomMnite theme is selected on first start.
 
-# Contributing
+Coming from the RomM Library Importer or an earlier RomMnite build named `RomM_9700aa21-...`: uninstall that add-on first (Add-ons > Extensions). Your settings and data are kept.
 
-To contribute to RomM Playnite plugin, please check [Contribution Guide](./CONTRIBUTING.md)
+# Building
 
-For setting up a local development environment (building, deploying, and debugging the plugin), see the [Development Guide](./DEVELOPMENT.md).
+```
+msbuild RomM.csproj /restore /p:Configuration=Release /p:Platform="AnyCPU" /p:CopyLocalLockFileAssemblies=true
+Toolbox.exe pack bin\Release\net462 <output folder>
+```
 
-# Community
+Pushing a version tag (for example `1.0.1`) builds and publishes a release with GitHub Actions (`.github/workflows/build.yml`). See [DEVELOPMENT.md](./DEVELOPMENT.md) for more.
 
-Join us on Discord, where you can ask questions, submit ideas, get help, showcase your collection, and discuss RomM with other users.
+# Support
 
-[![discord-invite]][discord-invite-url]
+Problems with RomMnite: [open an issue](https://github.com/Empyreai/RomMnite/issues/new). Problems with RomM itself belong in the [RomM repository](https://github.com/rommapp/romm/issues/new/choose).
 
-# Technical Support
+# License and acknowledgements
 
-If you have any issues with the plugin, please [open an issue](https://github.com/rommapp/playnite-plugin/issues/new) in this repository. If the issue is with RomM itself, open an issue in the [RomM repository](https://github.com/rommapp/romm/issues/new/choose).
+RomMnite is free software under the GNU General Public License v3.0 ([LICENSE](./LICENSE)), like the RomM Library Importer it is based on. Thanks to The RomM Team for the importer and for RomM, and to [@psychonic](https://github.com/psychonic)'s [Playnite EmuLibrary](https://github.com/psychonic/Playnite-EmuLibrary), which inspired the original importer.
 
-# Project Support
-
-Consider supporting the development of this project on Open Collective.
-
-[![oc-donate-img]][oc-donate]
-
-# Acknowledgement
-
-This plugin is **very heavily** inspired by the excellent [Playnite EmuLibrary](https://github.com/psychonic/Playnite-EmuLibrary) by [@psychonic](https://github.com/psychonic).
-
-<!-- Badges -->
-
-[license-badge-img]: https://img.shields.io/github/license/rommapp/playnite-plugin?style=for-the-badge&color=a32d2a&kill_cache=2
+[license-badge-img]: https://img.shields.io/github/license/Empyreai/RomMnite?style=for-the-badge&color=a32d2a
 [license-badge]: LICENSE
-[release-badge-img]: https://img.shields.io/github/v/release/rommapp/playnite-plugin?style=for-the-badge&kill_cache=2
-[release-badge]: https://github.com/rommapp/playnite-plugin/releases
-[discord-badge-img]: https://img.shields.io/badge/discord-7289da?style=for-the-badge
-[discord-badge]: https://discord.gg/P5HtHnhUDH
-
-<!-- Links -->
-
-[docs-installation-guide]: https://docs.romm.app/latest/Integrations/Playnite-plugin/
-[discord-invite]: https://invidget.switchblade.xyz/P5HtHnhUDH
-[discord-invite-url]: https://discord.gg/P5HtHnhUDH
-[oc-donate-img]: https://opencollective.com/romm/donate/button.png?color=blue
-[oc-donate]: https://opencollective.com/romm
+[release-badge-img]: https://img.shields.io/github/v/release/Empyreai/RomMnite?style=for-the-badge
+[release-badge]: https://github.com/Empyreai/RomMnite/releases

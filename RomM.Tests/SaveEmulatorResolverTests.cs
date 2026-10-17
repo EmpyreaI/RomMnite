@@ -15,7 +15,7 @@ namespace RomM.Tests
             new Emulator { Id = id ?? Guid.NewGuid(), Name = "RetroArch" };
 
         private static Emulator Dolphin() =>
-            new Emulator { Id = Guid.NewGuid(), Name = "Dolphin" };
+            new Emulator { Id = Guid.NewGuid(), Name = "Cemu" };
 
         private static SaveEmulatorCandidate FromAction(Emulator emulator, EmulatorProfile profile = null) =>
             new SaveEmulatorCandidate { Emulator = emulator, Profile = profile };
@@ -55,7 +55,7 @@ namespace RomM.Tests
                 FromMapping(fromMapping),
             });
 
-            Assert.Equal("Dolphin", resolution.Emulator?.Name);
+            Assert.Equal("Cemu", resolution.Emulator?.Name);
             Assert.Null(resolution.Handler);
             Assert.Same(fromMapping, resolution.PassedOverMappingEmulator);
         }
@@ -102,10 +102,10 @@ namespace RomM.Tests
             var resolution = SaveEmulatorResolver.Resolve(Handlers, new[]
             {
                 FromAction(Dolphin()),
-                FromMapping(new Emulator { Id = Guid.NewGuid(), Name = "PCSX2" }),
+                FromMapping(new Emulator { Id = Guid.NewGuid(), Name = "Cemu" }),
             });
 
-            Assert.Equal("Dolphin", resolution.Emulator?.Name);
+            Assert.Equal("Cemu", resolution.Emulator?.Name);
             Assert.Null(resolution.Handler);
             Assert.Null(resolution.PassedOverMappingEmulator);
         }

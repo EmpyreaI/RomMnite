@@ -8,6 +8,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
+using System.Threading;
 
 namespace RomM.Games
 {
@@ -25,6 +27,8 @@ namespace RomM.Games
         Dictionary<string, Game> _legacyGames;         // unmigrated "!0..." games, keyed by GameId
         Dictionary<string, Guid> _completionStatusMap;
         List<int> _favourites;
+        // RetroAchievements from RomM, pushed into SuccessStory; null when not in use.
+        readonly RomMAchievementSync _achievements;
         // Two enabled mappings on one platform both walk the same ROMs, and each pass would repoint
         // the play actions the other just wrote. Neither is more right than the other, so when that
         // is the setup the actions are left exactly as they are.
@@ -32,8 +36,18 @@ namespace RomM.Games
         // The emulator and profile this import writes onto play actions.
         readonly AppliedPlayAction _mapped;
 
-        public RomMImport(RomM plugin, LibraryImportGamesArgs args, EmulatorMapping mapping, List<RomMRom> roms, List<int> favourites)
+        // A partial import handles a hand-picked ROM or two (a game added from the Store), not a
+        // platform's full list: it must not treat every game it was not given as gone from the
+        // server, and what it is given is wanted by definition.
+        readonly bool _partial;
+        // ROMs this pass confirmed as part of the library, written to the user's list at the end.
+        readonly List<int> _inLibrary = new List<int>();
+        // Set by ImportGame when it declines a ROM that is neither added nor installed.
+        bool _declined;
+
+        public RomMImport(RomM plugin, LibraryImportGamesArgs args, EmulatorMapping mapping, List<RomMRom> roms, List<int> favourites, RomMAchievementSync achievements = null, bool partial = false)
         {
+            _partial = partial;
             _plugin = plugin;
             _args = args;
             _mapping = mapping;
@@ -67,6 +81,7 @@ namespace RomM.Games
 
             _completionStatusMap = plugin.Playnite.Database.CompletionStatuses.ToDictionary(cs => cs.Name, cs => cs.Id);
             _favourites = favourites;
+            _achievements = achievements;
 
             // Only mappings the import controller will actually run count: one it skips as
             // misconfigured writes nothing, so it cannot fight this one over the actions.
@@ -147,20 +162,33 @@ namespace RomM.Games
                     Guid statusID = Guid.Empty;
                     if (_existingGames.TryGetValue(gameID, out var existingGame))
                     {
-                        bool changed = RefreshPlayAction(existingGame, previous, out var applied);
-
-                        // Sync user data
-                        if (_plugin.Settings.KeepRomMSynced)
+                        // Added before its platform had an emulator: it takes this mapping's now.
+                        bool changed;
+                        AppliedPlayAction applied;
+                        if (_mapping.Emulator != null && RomMPlayAction.Find(existingGame.GameActions) == null
+                            && _plugin.Settings.MappingById(previous?.MappingID ?? Guid.Empty) == null)
                         {
-                            statusID = DetermineCompletionStatus(ROM);
-                            existingGame.Favorite = _favourites.Exists(f => f == ROM.Id);
-                            if (statusID != Guid.Empty)
-                                existingGame.CompletionStatusId = statusID;
+                            RomMPlayAction.AddTo(existingGame, _mapping.Emulator.Name, _mapped.EmulatorId, _mapped.ProfileId);
+                            applied = _mapped;
                             changed = true;
+                            _plugin.Logger.Info($"[Importer] {existingGame.Name} now plays in {_mapping.Emulator.Name} ({_mapping.MappingName}).");
                         }
+                        else
+                        {
+                            changed = RefreshPlayAction(existingGame, previous, out applied);
+                        }
+
+                        // Favorites, status and the rest of the user's data on games already here
+                        // are the sync's (UserDataSync, CollectionSync): writing the server's over
+                        // them here would undo changes not sent yet. New games still take them.
 
                         if (changed)
                             SaveOwnWrite(existingGame);
+
+                        _inLibrary.Add(ROM.Id);
+                        EnsureLogo(existingGame, ROM);
+                        _achievements?.Apply(existingGame, ROM);
+                        _plugin.Videos.Set(existingGame.Id, ROM.SSMetadata?.VideoPath ?? ROM.SSMetadata?.VideoNormalizedPath);
 
                         // Save Game ROM data to file
                         SaveGameData(ROM, previous, previousJson, applied);
@@ -177,17 +205,40 @@ namespace RomM.Games
                         if (RefreshPlayAction(adoptedGame, previous, out var applied))
                             SaveOwnWrite(adoptedGame);
 
+                        _inLibrary.Add(ROM.Id);
+                        EnsureLogo(adoptedGame, ROM);
+                        _achievements?.Apply(adoptedGame, ROM);
+                        _plugin.Videos.Set(adoptedGame.Id, ROM.SSMetadata?.VideoPath ?? ROM.SSMetadata?.VideoNormalizedPath);
+
                         SaveGameData(ROM, previous, previousJson, applied);
                         importedGameIds.Add(gameID);
                         continue;
                     }
 
-                    // A new game gets the mapping's emulator outright, below.
-                    SaveGameData(ROM, previous, previousJson, _mapped);
+                    // Store-style library: a game the user has not added comes in only if it is
+                    // found installed, which ImportGame checks before doing any real work.
+                    bool wanted = _partial || !_plugin.Settings.LibraryOnlyAddedGames || _plugin.Library.Contains(ROM.Id);
 
-                    var importedGame = ImportGame(ROM, statusID);
+                    // A new game gets the mapping's emulator outright. Its record is written
+                    // before the game is created, as always, except for a game that may yet be
+                    // declined: that one gets its record only once it is known to be coming in.
+                    if (wanted)
+                        SaveGameData(ROM, previous, previousJson, _mapped);
+
+                    _declined = false;
+                    var importedGame = ImportGame(ROM, statusID, !wanted);
+                    if (_declined)
+                        continue;
+
+                    if (!wanted)
+                        SaveGameData(ROM, previous, previousJson, _mapped);
+
                     if (importedGame != null)
                     {
+                        _inLibrary.Add(ROM.Id);
+                        EnsureLogo(importedGame, ROM);
+                        _achievements?.Apply(importedGame, ROM);
+                        _plugin.Videos.Set(importedGame.Id, ROM.SSMetadata?.VideoPath ?? ROM.SSMetadata?.VideoNormalizedPath);
                         games.Add(importedGame);
                         importedGameIds.Add(gameID);
                     }
@@ -197,18 +248,22 @@ namespace RomM.Games
                     }
                 }
 
+                _plugin.Videos.Save();
                 _plugin.Logger.Info($"[Importer] Finished adding new games for {_mapping.RomMPlatform.PlayniteName}");
 
-                if (!_plugin.Settings.KeepDeletedGames)
+                if (!_plugin.Settings.KeepDeletedGames && !_partial)
                 {
                     RemoveMissingGames(importedGameIds);
                 }
+
+                // Everything Playnite holds counts as in the library, so the user's list mirrors it.
+                _plugin.Library.AddMany(_inLibrary);
             }
 
             return games;
         }
 
-        private Game ImportGame(RomMRom ROM, Guid StatusID)
+        private Game ImportGame(RomMRom ROM, Guid StatusID, bool onlyIfInstalled = false)
         {
             var rootInstallDir = _plugin.Playnite.Paths.IsPortable
                         ? _mapping.DestinationPathResolved.Replace(_plugin.Playnite.Paths.ApplicationPath, ExpandableVariables.PlayniteDirectory)
@@ -247,23 +302,65 @@ namespace RomM.Games
             var gameInstallDir = flatLayout ? rootInstallDir : RomMInstallPaths.InstallDir(rootInstallDir, folderName, fileName);
             var pathToGame = flatLayout ? $"{rootInstallDir}\\{fileName}" : RomMInstallPaths.GamePath(rootInstallDir, folderName, fileName);
 
+            // Is the game already on disk -- removed from Playnite and re-imported, say? The paths
+            // above may carry Playnite's "{PlayniteDir}" variable on a portable install, which no
+            // filesystem call understands, so the check runs on the real paths and what it finds
+            // is turned back into the stored form.
+            // No emulator yet (see RomMImportController.ImportSingle): nothing says which files
+            // are its own, so it comes in uninstalled; installing it sets the platform up first.
+            bool pending = _mapping.Emulator == null;
+            var supportedTypes = RomMInstalledRoms.SupportedTypes(_mapping);
+            var installedRoms = pending ? new List<string>() : RomMInstalledRoms.Detect(
+                PlaynitePath.Resolve(_plugin.Playnite, pathToGame),
+                PlaynitePath.Resolve(_plugin.Playnite, gameInstallDir),
+                flatLayout,
+                RomMInstallPaths.IsSingleRomInFolder(baseRevision?.DownloadAsArchive ?? false, baseRevision?.HasMultipleFiles ?? false),
+                playableFile,
+                baseRevision != null && baseRevision.DownloadAsArchive && !string.IsNullOrEmpty(baseRevision.FileName)
+                    ? Path.Combine(PlaynitePath.Resolve(_plugin.Playnite, gameInstallDir), baseRevision.FileName + ".zip")
+                    : null,
+                supportedTypes,
+                _mapping.UseM3U && supportedTypes != null && supportedTypes.Any(t => string.Equals(t, "m3u", StringComparison.OrdinalIgnoreCase)));
+
+            // Not added by the user and not on disk: leave it to the Store. Decided here, before
+            // any artwork is fetched for it.
+            if (onlyIfInstalled && installedRoms.Count == 0)
+            {
+                _declined = true;
+                return null;
+            }
+
             var status = _plugin.Playnite.Database.CompletionStatuses.Get(StatusID);
             var completionStatusProperty = status != null ? new MetadataNameProperty(status.Name) : null;
 
-            var metadata = RomMMetadataMapper.BuildBaseMetadata(ROM, _plugin.Settings.RomMHost, _plugin.Playnite.ApplicationSettings.AgeRatingOrgPriority.ToString());
+            var metadata = RomMMetadataMapper.BuildBaseMetadata(ROM, _plugin.Settings.RomMHost, _plugin.Playnite.ApplicationSettings.AgeRatingOrgPriority.ToString(),
+                RomMMediaProbe.For(_plugin.Settings.RomMHost, _args.CancelToken));
+
+            RomMIconNormalizer.Apply(metadata, ROM, _plugin.Settings.RomMHost, _plugin.Logger, _args.CancelToken);
 
             metadata.Source = _plugin.Source;
             metadata.GameId = $"{ROM.Id}:{ROM.SHA1}";
             metadata.Platforms = new HashSet<MetadataProperty> { new MetadataNameProperty(_mapping.RomMPlatform.PlayniteName ?? "") };
             metadata.Favorite = _favourites.Exists(f => f == ROM.Id);
             metadata.CompletionStatus = completionStatusProperty;
-            metadata.Roms = new List<GameRom> { new GameRom(ROM.FileNameNoExt, pathToGame) };
+            if (installedRoms.Count > 0)
+            {
+                metadata.Roms = installedRoms
+                    .Select(path => new GameRom(
+                        installedRoms.Count == 1 ? ROM.FileNameNoExt : Path.GetFileNameWithoutExtension(path),
+                        ToStoredPath(path)))
+                    .ToList();
+                _plugin.Logger.Info($"[Importer] {ROM.Name} is already installed; found {installedRoms.Count} file(s) under {gameInstallDir}.");
+            }
+            else
+            {
+                metadata.Roms = new List<GameRom> { new GameRom(ROM.FileNameNoExt, pathToGame) };
+            }
             metadata.InstallDirectory = gameInstallDir;
-            metadata.IsInstalled = File.Exists(pathToGame);
+            metadata.IsInstalled = installedRoms.Count > 0;
             metadata.InstallSize = ROM.FileSizeBytes;
             metadata.GameActions = new List<GameAction>
             {
-                RomMPlayAction.Build(_mapping.Emulator.Name, _mapped.EmulatorId, _mapped.ProfileId),
                 new GameAction
                 {
                     Type = GameActionType.URL,
@@ -272,6 +369,8 @@ namespace RomM.Games
                     IsPlayAction = false
                 }
             };
+            if (!pending)
+                metadata.GameActions.Insert(0, RomMPlayAction.Build(_mapping.Emulator.Name, _mapped.EmulatorId, _mapped.ProfileId));
 
 
             // Import new game
@@ -285,6 +384,77 @@ namespace RomM.Games
             }
 
             return game;
+        }
+
+        // Client for logos hosted outside RomM (Screenscraper). Kept separate from HttpClientSingleton
+        // so the RomM credentials on that client are never sent to a third-party host.
+        private static readonly HttpClient s_externalHttp = new HttpClient();
+
+        // Saves the game's RomM logo where the ExtraMetadataLoader extension looks for one:
+        // <Playnite config>\ExtraMetadata\games\<game id>\Logo.png. A logo that is already there
+        // (from RomM, another source, or set by hand) is never replaced. Best-effort: a failure is
+        // logged and the import carries on.
+        private void EnsureLogo(Game game, RomMRom ROM)
+        {
+            try
+            {
+                if (game == null || _args.CancelToken.IsCancellationRequested)
+                    return;
+
+                string url = RomMMetadataMapper.LogoUrl(_plugin.Settings.RomMHost, ROM, out bool servedByRomM);
+                if (string.IsNullOrEmpty(url))
+                    return;
+
+                string dir = Path.Combine(_plugin.Playnite.Paths.ConfigurationPath, "ExtraMetadata", "games", game.Id.ToString());
+                string logoPath = Path.Combine(dir, "Logo.png");
+                if (File.Exists(logoPath))
+                    return;
+
+                var client = servedByRomM ? HttpClientSingleton.Instance : s_externalHttp;
+                using (var cts = CancellationTokenSource.CreateLinkedTokenSource(_args.CancelToken))
+                {
+                    cts.CancelAfter(TimeSpan.FromSeconds(20));
+                    using (var response = client.GetAsync(url, cts.Token).GetAwaiter().GetResult())
+                    {
+                        if (!response.IsSuccessStatusCode)
+                        {
+                            _plugin.Logger.Warn($"[Importer] Logo for {ROM.Name} not downloaded: HTTP {(int)response.StatusCode}");
+                            return;
+                        }
+
+                        byte[] bytes = response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult();
+                        if (bytes.Length == 0)
+                            return;
+
+                        // Write beside the target and move into place so a cancelled or failed
+                        // download never leaves a truncated Logo.png behind.
+                        Directory.CreateDirectory(dir);
+                        string tmpPath = logoPath + ".tmp";
+                        File.WriteAllBytes(tmpPath, bytes);
+                        if (File.Exists(logoPath))
+                            File.Delete(tmpPath);
+                        else
+                            File.Move(tmpPath, logoPath);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _plugin.Logger.Warn($"[Importer] Logo for {ROM.Name} not downloaded: {ex.Message}");
+            }
+        }
+
+        // The form paths are stored in: relative to Playnite's own folder on a portable install,
+        // so the library still works when that folder is moved or copied to another computer.
+        private string ToStoredPath(string realPath)
+        {
+            if (string.IsNullOrEmpty(realPath) || !_plugin.Playnite.Paths.IsPortable)
+                return realPath;
+
+            string app = _plugin.Playnite.Paths.ApplicationPath;
+            return !string.IsNullOrEmpty(app) && realPath.StartsWith(app, StringComparison.OrdinalIgnoreCase)
+                ? ExpandableVariables.PlayniteDirectory + realPath.Substring(app.Length)
+                : realPath;
         }
 
         // Removes the playnite game for the given id (if present) and keeps the indexes consistent.

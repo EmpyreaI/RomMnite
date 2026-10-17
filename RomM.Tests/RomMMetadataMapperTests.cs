@@ -49,31 +49,215 @@ namespace RomM.Tests
         }
 
         [Fact]
-        public void Icon_uses_miximage_path_under_resource_mount()
+        public void Background_uses_fanart_path_under_resource_mount()
+        {
+            var rom = NewRom();
+            rom.SSMetadata = new RomMSSMetadata
+            {
+                FanartPath = "roms/2/32/fanart/fanart.png",
+                FanartUrl = "https://ss.example/fanart.png",
+            };
+
+            var md = Map(rom);
+
+            Assert.NotNull(md.BackgroundImage);
+            Assert.Equal(Host + "/assets/romm/resources/roms/2/32/fanart/fanart.png", md.BackgroundImage.Path);
+        }
+
+        [Fact]
+        public void Background_falls_back_to_fanart_url_when_no_path()
+        {
+            var rom = NewRom();
+            rom.SSMetadata = new RomMSSMetadata { FanartUrl = "https://ss.example/fanart.png" };
+
+            Assert.Equal("https://ss.example/fanart.png", Map(rom).BackgroundImage.Path);
+        }
+
+        [Fact]
+        public void Background_is_null_without_fanart()
         {
             var rom = NewRom();
             rom.SSMetadata = new RomMSSMetadata { MiximagePath = "roms/2/32/miximage/miximage.png" };
 
-            var md = Map(rom);
-
-            Assert.NotNull(md.Icon);
-            Assert.Equal(Host + "/assets/romm/resources/roms/2/32/miximage/miximage.png", md.Icon.Path);
+            Assert.Null(Map(rom).BackgroundImage);
+            Assert.Null(Map(NewRom()).BackgroundImage);
         }
 
         [Fact]
-        public void Icon_falls_back_to_miximage_url_when_no_path()
+        public void Logo_url_prefers_romm_hosted_path()
         {
             var rom = NewRom();
-            rom.SSMetadata = new RomMSSMetadata { MiximageUrl = "https://ss.example/mix.png" };
+            rom.SSMetadata = new RomMSSMetadata
+            {
+                LogoPath = "roms/2/32/logo/logo.png",
+                LogoUrl = "https://ss.example/wheel.png",
+            };
 
-            var md = Map(rom);
+            var url = RomMMetadataMapper.LogoUrl(Host, rom, out bool servedByRomM);
 
-            Assert.NotNull(md.Icon);
-            Assert.Equal("https://ss.example/mix.png", md.Icon.Path);
+            Assert.Equal(Host + "/assets/romm/resources/roms/2/32/logo/logo.png", url);
+            Assert.True(servedByRomM);
         }
 
         [Fact]
-        public void Icon_prefers_path_over_url()
+        public void Logo_url_falls_back_to_external_url()
+        {
+            var rom = NewRom();
+            rom.SSMetadata = new RomMSSMetadata { LogoUrl = "https://ss.example/wheel.png" };
+
+            var url = RomMMetadataMapper.LogoUrl(Host, rom, out bool servedByRomM);
+
+            Assert.Equal("https://ss.example/wheel.png", url);
+            Assert.False(servedByRomM);
+        }
+
+        [Fact]
+        public void Logo_url_is_null_without_logo()
+        {
+            Assert.Null(RomMMetadataMapper.LogoUrl(Host, NewRom(), out bool _));
+
+            var rom = NewRom();
+            rom.SSMetadata = new RomMSSMetadata { FanartUrl = "https://ss.example/fanart.png" };
+            Assert.Null(RomMMetadataMapper.LogoUrl(Host, rom, out bool _));
+        }
+
+        [Fact]
+        public void Description_appends_box_front_and_back_side_by_side()
+        {
+            var rom = NewRom();
+            rom.SSMetadata = new RomMSSMetadata
+            {
+                Box2dPath = "roms/2/32/box2d/box2d.png",
+                Box2dBackUrl = "https://ss.example/back.png?a=1&b=2",
+            };
+
+            Assert.Equal(
+                "A turn-based strategy game.<br><br>"
+                + "<img src=\"" + Host + "/assets/romm/resources/roms/2/32/box2d/box2d.png\" style=\"width:49%\">"
+                + "<img src=\"https://ss.example/back.png?a=1&amp;b=2\" style=\"width:49%\">",
+                Map(rom).Description);
+        }
+
+        [Fact]
+        public void Description_is_only_box_art_without_summary()
+        {
+            var rom = NewRom();
+            rom.Summary = null;
+            rom.SSMetadata = new RomMSSMetadata { Box2dBackPath = "roms/2/32/box2d_back/box2d_back.png" };
+
+            Assert.Equal(
+                "<img src=\"" + Host + "/assets/romm/resources/roms/2/32/box2d_back/box2d_back.png\" style=\"width:49%\">",
+                Map(rom).Description);
+        }
+
+        [Fact]
+        public void Description_leaves_out_box_art_that_does_not_load()
+        {
+            var rom = NewRom();
+            rom.SSMetadata = new RomMSSMetadata
+            {
+                Box2dPath = "roms/2/32/box2d/box2d.png",
+                Box2dBackUrl = "https://ss.example/back.png",
+            };
+
+            var md = RomMMetadataMapper.BuildBaseMetadata(rom, Host, "ESRB", url => url.StartsWith(Host));
+
+            Assert.Equal(
+                "A turn-based strategy game.<br><br>"
+                + "<img src=\"" + Host + "/assets/romm/resources/roms/2/32/box2d/box2d.png\" style=\"width:49%\">",
+                md.Description);
+
+            var none = RomMMetadataMapper.BuildBaseMetadata(rom, Host, "ESRB", url => false);
+            Assert.Equal("A turn-based strategy game.", none.Description);
+        }
+
+        [Fact]
+        public void Manual_is_a_details_link_not_part_of_the_description()
+        {
+            var rom = NewRom();
+            rom.HasManual = true;
+            rom.ManualPath = "roms/2/32/manual/32.pdf";
+
+            var md = Map(rom);
+
+            Assert.Equal("A turn-based strategy game.", md.Description);
+            var manual = Assert.Single(md.Links, l => l.Name == "Manual");
+            Assert.Equal(Host + "/assets/romm/resources/roms/2/32/manual/32.pdf", manual.Url);
+        }
+
+        [Fact]
+        public void No_manual_link_without_a_manual()
+        {
+            Assert.DoesNotContain(Map(NewRom()).Links, l => l.Name == "Manual");
+        }
+
+        [Fact]
+        public void Description_is_untouched_without_box_art()
+        {
+            var rom = NewRom();
+            rom.SSMetadata = new RomMSSMetadata { FanartUrl = "https://ss.example/fanart.png" };
+
+            Assert.Equal("A turn-based strategy game.", Map(rom).Description);
+        }
+
+        [Fact]
+        public void Background_falls_back_to_first_stored_screenshot()
+        {
+            var rom = NewRom();
+            rom.MergedScreenshots = new List<string>
+            {
+                "/assets/romm/resources/roms/2/32/screenshots/0.jpg",
+                "/assets/romm/resources/roms/2/32/screenshots/1.jpg",
+            };
+            rom.SSMetadata = new RomMSSMetadata { ScreenshotUrl = "https://ss.example/ss.png" };
+
+            Assert.Equal(Host + "/assets/romm/resources/roms/2/32/screenshots/0.jpg", Map(rom).BackgroundImage.Path);
+        }
+
+        [Fact]
+        public void Background_falls_back_to_external_screenshot_url()
+        {
+            var rom = NewRom();
+            rom.SSMetadata = new RomMSSMetadata { ScreenshotUrl = "https://ss.example/ss.png" };
+
+            Assert.Equal("https://ss.example/ss.png", Map(rom).BackgroundImage.Path);
+        }
+
+        [Fact]
+        public void Background_prefers_fanart_over_screenshots()
+        {
+            var rom = NewRom();
+            rom.MergedScreenshots = new List<string> { "/assets/romm/resources/roms/2/32/screenshots/0.jpg" };
+            rom.SSMetadata = new RomMSSMetadata { FanartUrl = "https://ss.example/fanart.png" };
+
+            Assert.Equal("https://ss.example/fanart.png", Map(rom).BackgroundImage.Path);
+        }
+
+        [Fact]
+        public void Icon_prefers_logo_over_cover()
+        {
+            var rom = NewRom();
+            rom.PathCoverL = "/assets/romm/resources/roms/2/32/cover/big.png?ts=1";
+            rom.SSMetadata = new RomMSSMetadata { LogoPath = "roms/2/32/logo/logo.png" };
+
+            Assert.Equal(Host + "/assets/romm/resources/roms/2/32/logo/logo.png", Map(rom).Icon.Path);
+        }
+
+        [Fact]
+        public void Icon_falls_back_to_cover_without_logo()
+        {
+            var rom = NewRom();
+            rom.PathCoverL = "/assets/romm/resources/roms/2/32/cover/big.png?ts=1";
+            rom.SSMetadata = new RomMSSMetadata { MiximagePath = "roms/2/32/miximage/miximage.png" };
+
+            Assert.Equal(Host + "/assets/romm/resources/roms/2/32/cover/big.png?ts=1", Map(rom).Icon.Path);
+
+            RomMMetadataMapper.IconUrl(Host, rom, out bool servedByRomM);
+            Assert.True(servedByRomM);
+        }
+
+        [Fact]
+        public void Icon_never_uses_the_miximage()
         {
             var rom = NewRom();
             rom.SSMetadata = new RomMSSMetadata
@@ -82,24 +266,13 @@ namespace RomM.Tests
                 MiximageUrl = "https://ss.example/mix.png",
             };
 
-            var md = Map(rom);
-
-            Assert.Equal(Host + "/assets/romm/resources/roms/2/32/miximage/miximage.png", md.Icon.Path);
+            Assert.Null(Map(rom).Icon);
         }
 
         [Fact]
-        public void Icon_is_null_without_ss_metadata()
+        public void Icon_is_null_without_logo_or_cover()
         {
             Assert.Null(Map(NewRom()).Icon);
-        }
-
-        [Fact]
-        public void Icon_is_null_when_miximage_absent()
-        {
-            var rom = NewRom();
-            rom.SSMetadata = new RomMSSMetadata();
-
-            Assert.Null(Map(rom).Icon);
         }
 
         [Fact]
@@ -125,9 +298,9 @@ namespace RomM.Tests
         {
             var rom = NewRom();
             rom.Metadatum.Genres = new List<string> { "Strategy", "", "Tactics" };
-            rom.Metadatum.Franchises = new List<string> { "Advance Wars" };
+            rom.Metadatum.Franchises = new List<string> { "Nintendo Wars" };
             rom.Metadatum.Gamemodes = new List<string> { "Single player" };
-            rom.Metadatum.Collections = new List<string> { "Nintendo" };
+            rom.Metadatum.Collections = new List<string> { "Advance Wars" };
             rom.Regions = new List<string> { "USA", "" };
 
             var md = Map(rom);
@@ -135,8 +308,50 @@ namespace RomM.Tests
             Assert.Equal(new[] { "Strategy", "Tactics" }, Names(md.Genres));
             Assert.Equal(new[] { "Advance Wars" }, Names(md.Series));
             Assert.Equal(new[] { "Single player" }, Names(md.Features));
-            Assert.Equal(new[] { "Nintendo" }, Names(md.Categories));
+            Assert.Equal(new[] { "Advance Wars" }, Names(md.Categories));
             Assert.Equal(new[] { "USA" }, Names(md.Regions));
+        }
+
+        [Fact]
+        public void Series_are_collections_not_wider_franchises()
+        {
+            var rom = NewRom();
+            rom.Name = "Kingdom Hearts II";
+            rom.Metadatum.Franchises = new List<string> { "Disney", "Donald Duck", "Final Fantasy" };
+            rom.Metadatum.Collections = new List<string> { "Kingdom Hearts" };
+
+            Assert.Equal(new[] { "Kingdom Hearts" }, Names(Map(rom).Series));
+        }
+
+        [Fact]
+        public void Sub_series_fold_into_their_series_but_not_inside_a_word()
+        {
+            var rom = NewRom();
+            rom.Name = "The Legend of Zelda: Four Swords Adventures";
+            rom.Metadatum.Collections = new List<string> { "The Legend of Zelda", "The Legend of Zelda: Four Swords", "WarioWare", "Wario" };
+
+            Assert.Equal(new[] { "The Legend of Zelda", "Wario", "WarioWare" }, Names(Map(rom).Series));
+        }
+
+        [Fact]
+        public void Without_collections_only_franchises_the_title_names_are_series()
+        {
+            var rom = NewRom();
+            rom.Name = "Kingdom Hearts 358/2 Days";
+            rom.Metadatum.Collections = new List<string>();
+            rom.Metadatum.Franchises = new List<string> { "Disney", "Goofy", "Kingdom Hearts", "Final Fantasy" };
+
+            Assert.Equal(new[] { "Kingdom Hearts" }, Names(Map(rom).Series));
+        }
+
+        [Fact]
+        public void Series_fall_back_to_franchises_without_collections()
+        {
+            var rom = NewRom();
+            rom.Metadatum.Franchises = new List<string> { "Advance Wars" };
+            rom.Metadatum.Collections = new List<string>();
+
+            Assert.Equal(new[] { "Advance Wars" }, Names(Map(rom).Series));
         }
 
         [Fact]

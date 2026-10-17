@@ -241,16 +241,61 @@ namespace RomM.Settings
  
         public bool ScanGamesInFullScreen { get; set; } = false;
         public bool NotifyOnInstallComplete { get; set; } = false;
-        public bool KeepRomMSynced { get; set; } = false;
+        // Always on: favorites, status, score, notes and play time follow the account.
+        // (Settable only so older settings files still read.)
+        public bool KeepRomMSynced { get => true; set { } }
 
         // Save sync (RetroArch saves <-> RomM server). DeviceId is assigned by the server on first
         // registration and persisted so this machine keeps the same RomM device across sessions.
-        public bool EnableSaveSync { get; set; } = false;
+        // Always on; a game is switched off from its menu (Saves.SaveSyncOptOut).
+        public bool EnableSaveSync { get => true; set { } }
+        // Whether a game's video starts playing as soon as the game is selected.
+        public bool AutoPlayVideos { get; set; } = false;
+
+        // The in-game overlay (Overlay/GameOverlay): the controller button that opens it
+        // ("Guide" the Home button, "BackStart" or "L3R3" held, "None" keyboard only), whether
+        // Windows games get it too, and whether emulators' own menus are moved to Start + Select
+        // (Setup/EmulatorMenus) so the Home button is the overlay's alone.
+        public string OverlayButton { get; set; } = "Guide";
+        public bool OverlayForPcGames { get; set; } = true;
+        public bool EmulatorMenusOnStartSelect { get; set; } = true;
+
+        // Emulators render at the display's resolution, where still at their default
+        // (Setup/EmulatorUpscale).
+        public bool EmulatorsAtDisplayResolution { get; set; } = true;
+
+        // Sunshine (game streaming): installed games listed in it as applications (Integrations/
+        // SunshineSync), through its web API with its web UI's name and password. The password
+        // is kept sealed for this Windows user (DPAPI), never as it is typed.
+        public bool SunshineEnabled { get; set; } = false;
+        public string SunshineUrl { get; set; } = "https://localhost:47990";
+        public string SunshineUser { get; set; } = "";
+        public string SunshinePasswordProtected { get; set; } = "";
+
+        internal Integrations.SunshineSettings SunshineSettings() => new Integrations.SunshineSettings
+        {
+            Enabled = SunshineEnabled,
+            Url = SunshineUrl,
+            User = SunshineUser,
+            Password = Integrations.SunshineSync.Unprotect(SunshinePasswordProtected),
+        };
+        // Steam's description in place of RomM's, for games RomM has matched on Steam.
+        public bool UseSteamDescriptions { get => true; set { } }
+        // Whether game details show the row of unlocked and the row of locked achievements.
+        public bool ShowUnlockedAchievements { get; set; } = true;
+        public bool ShowLockedAchievements { get; set; } = true;
+        // Store-style library: a library update only brings in games the user added from the
+        // Store or already has installed, where it otherwise brings in everything on the server.
+        public bool LibraryOnlyAddedGames { get => true; set { } }
         public string SaveSyncDeviceId { get; set; } = "";
         // The host that issued SaveSyncDeviceId. A device id only means anything on the server that
         // created it, so pointing the plugin at a different RomM has to re-register rather than
         // sync against an id that server has never seen.
         public string SaveSyncDeviceHost { get; set; } = "";
+        // The computer SaveSyncDeviceId was issued to. RomM tracks what each device has synced, so
+        // a Playnite folder copied to a second computer must not carry the first one's identity:
+        // the server would believe the copy already holds saves it has never seen.
+        public string SaveSyncDeviceMachine { get; set; } = "";
         public bool Use7z { get; set; } = false;
         public string PathTo7z
         {
@@ -347,8 +392,22 @@ namespace RomM.Settings
                 KeepDeletedGames = savedSettings.KeepDeletedGames;
                 ExcludeGenres = savedSettings.ExcludeGenres;
                 EnableSaveSync = savedSettings.EnableSaveSync;
+                AutoPlayVideos = savedSettings.AutoPlayVideos;
+                OverlayButton = string.IsNullOrEmpty(savedSettings.OverlayButton) ? "Guide" : savedSettings.OverlayButton;
+                OverlayForPcGames = savedSettings.OverlayForPcGames;
+                EmulatorMenusOnStartSelect = savedSettings.EmulatorMenusOnStartSelect;
+                EmulatorsAtDisplayResolution = savedSettings.EmulatorsAtDisplayResolution;
+                SunshineEnabled = savedSettings.SunshineEnabled;
+                SunshineUrl = string.IsNullOrWhiteSpace(savedSettings.SunshineUrl) ? "https://localhost:47990" : savedSettings.SunshineUrl;
+                SunshineUser = savedSettings.SunshineUser ?? "";
+                SunshinePasswordProtected = savedSettings.SunshinePasswordProtected ?? "";
+                UseSteamDescriptions = savedSettings.UseSteamDescriptions;
+                ShowUnlockedAchievements = savedSettings.ShowUnlockedAchievements;
+                ShowLockedAchievements = savedSettings.ShowLockedAchievements;
+                LibraryOnlyAddedGames = savedSettings.LibraryOnlyAddedGames;
                 SaveSyncDeviceId = savedSettings.SaveSyncDeviceId;
                 SaveSyncDeviceHost = savedSettings.SaveSyncDeviceHost;
+                SaveSyncDeviceMachine = savedSettings.SaveSyncDeviceMachine;
             }
             
             if (Mappings == null)
@@ -574,6 +633,26 @@ namespace RomM.Settings
                 HttpClientSingleton.ConfigureAPIAuth(RomMClientToken);
             }
 
+            // Apply the video setting straight away rather than at the next start.
+            if (_plugin is RomM romM)
+            {
+                romM.CloudStatus.VideoOn = AutoPlayVideos;
+                romM.CloudStatus.Achievements.EnableIntegrationCompactUnlocked = ShowUnlockedAchievements;
+                romM.CloudStatus.Achievements.EnableIntegrationCompactLocked = ShowLockedAchievements;
+                // A platform mapped here to an emulator of the user's own: its games play now.
+                romM.AdoptReadyMappings();
+
+                // Sunshine: brought up to date when on; turned off, its games taken back out.
+                bool wasOn = editingClone?.SunshineEnabled == true;
+                if (SunshineEnabled)
+                    romM.Sunshine?.SyncInBackground();
+                else if (wasOn && romM.Sunshine != null)
+                {
+                    var sunshine = romM.Sunshine;
+                    var before = editingClone.SunshineSettings();
+                    System.Threading.Tasks.Task.Run(() => sunshine.RemoveAllAsync(before));
+                }
+            }
         }
 
         // Persists the current settings to disk. Used by background features (e.g. save sync device

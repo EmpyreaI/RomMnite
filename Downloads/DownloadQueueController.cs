@@ -37,6 +37,14 @@ namespace RomM.Downloads
 
         public DownloadQueueViewModel ViewModel => vm;
 
+        internal IPlayniteAPI Api => api;
+
+        /// <summary>When games finished downloading here (the Recent Games shelf's order); may be null.</summary>
+        public RecentDownloads Recent { get; set; }
+
+        /// <summary>A download finished and its game is installed (the game's id; on the download's thread).</summary>
+        public event Action<Guid> Finished;
+
         public void Enqueue(DownloadRequest req)
         {
             var item = new DownloadQueueItem
@@ -48,6 +56,10 @@ namespace RomM.Downloads
             };
 
             activeDownloads[item.GameId] = item.Cts;
+
+            // Started now: the game keeps its place at the front of Recent Games whatever becomes
+            // of the download (finished, or cancelled), as Steam's does.
+            Recent?.MarkAdded(item.GameId);
 
             item.SetStatus(DownloadStatus.Queued, "Queued");
             item.SetProgress(0, 1, true);
@@ -71,6 +83,82 @@ namespace RomM.Downloads
                     Logger.Warn(ex, "An error occurred while cancelling a download.");
                 }
             }
+        }
+
+        /// <summary>The queue entry for a game, or null when it is not downloading.</summary>
+        public DownloadQueueItem Find(Guid gameId)
+        {
+            return vm.Items.FirstOrDefault(i => i.GameId == gameId);
+        }
+
+        /// <summary>
+        /// Pauses a download, or resumes a paused one. A pause takes effect at the next chunk; the
+        /// partial file is kept and the download carries on from there when resumed, provided the
+        /// server supports it (otherwise it starts again).
+        /// </summary>
+        public void TogglePause(Guid gameId)
+        {
+            var item = Find(gameId);
+            if (item != null && item.CanPause)
+                item.PauseRequested = !item.PauseRequested;
+        }
+
+        // Parks the download while the user has it paused. Cancelling still works: the token is
+        // what ends the wait.
+        // How often a download's progress is reported to the UI.
+        private const int UiUpdateMs = 250;
+
+        // Retries in a row, with no real progress between them, before a download gives up.
+        private const int RetryLimit = 8;
+        // Progress that counts as the connection working again (resets the count).
+        private const long RetryProgressReset = 4 * 1024 * 1024;
+        // How long a connection may go without data before it is taken for dead.
+        private static readonly TimeSpan StallTimeout = TimeSpan.FromSeconds(60);
+
+        /// <summary>A failure worth retrying: the server is busy, or the connection broke.</summary>
+        private sealed class TransientDownloadException : Exception
+        {
+            public TransientDownloadException(string message) : base(message) { }
+        }
+
+        // Connection-level failures: a dropped or reset socket (IOException, the SslStream
+        // "disposed object" when the connection is torn down under the read), a request that
+        // could not be sent or timed out. An HTTP error the server meant (404, 401...) is not.
+        private static bool IsTransient(Exception ex)
+        {
+            for (Exception e = ex; e != null; e = e.InnerException)
+            {
+                if (e is TransientDownloadException || e is IOException || e is ObjectDisposedException
+                    || e is System.Net.WebException || e is System.Net.Sockets.SocketException || e is TimeoutException
+                    || e is TaskCanceledException)
+                    return true;
+                // Without an inner exception it is EnsureSuccessStatusCode's, for an answer the
+                // server meant (5xx, 408 and 429 were turned into retries before it).
+                if (e is HttpRequestException && e.InnerException == null)
+                    return false;
+            }
+            return false;
+        }
+
+        private static async Task WaitWhilePaused(DownloadQueueItem item, long downloaded, long? totalBytes, CancellationToken ct)
+        {
+            if (!item.PauseRequested)
+                return;
+
+            item.SetSpeed(0);
+            if (totalBytes.HasValue && totalBytes.Value > 0)
+            {
+                item.SetProgress(downloaded, totalBytes.Value, false);
+                item.SetStatus(DownloadStatus.Paused, "Paused " + ((double)downloaded / totalBytes.Value * 100.0).ToString("0") + "%");
+            }
+            else
+            {
+                item.SetProgress(0, 1, false);
+                item.SetStatus(DownloadStatus.Paused, "Paused");
+            }
+
+            while (item.PauseRequested)
+                await Task.Delay(250, ct).ConfigureAwait(false);
         }
 
         private async Task ProcessItem(DownloadQueueItem item, DownloadRequest req)
@@ -121,59 +209,170 @@ namespace RomM.Downloads
         {
             var ct = item.Cts.Token;
 
-            item.SetStatus(DownloadStatus.Downloading, "Downloading...");
-            item.SetProgress(0, 1, true);
+            Directory.CreateDirectory(req.InstallDir);
 
-            using (var response = await RomM.GetAsync(req.DownloadUrl, HttpCompletionOption.ResponseHeadersRead, ct)
-                                            .ConfigureAwait(false))
+            byte[] buffer = new byte[1024 * 256];
+            long downloaded = 0;
+            long? totalBytes = null;
+
+            // One pass per connection. A pause closes the connection and the next pass asks the
+            // server to carry on from where the file ends, so a paused download holds no socket
+            // open for the server to time out. A connection that drops or stalls is retried the
+            // same way, after a short wait; only failures in a row without any progress between
+            // them give up (see RetryLimit).
+            int failuresInARow = 0;
+            while (true)
             {
-                response.EnsureSuccessStatusCode();
+                ct.ThrowIfCancellationRequested();
+                await WaitWhilePaused(item, downloaded, totalBytes, ct).ConfigureAwait(false);
 
-                var totalBytes = response.Content.Headers.ContentLength;
-                item.SetProgress(0, totalBytes ?? 1, !totalBytes.HasValue);
+                item.SetStatus(DownloadStatus.Downloading, "Downloading...");
+                if (downloaded == 0)
+                    item.SetProgress(0, 1, true);
 
-                Directory.CreateDirectory(req.InstallDir);
+                bool pausedMidway = false;
+                long passStart = downloaded;
 
-                byte[] buffer = new byte[1024 * 256];
-                long downloaded = 0;
-                long lastUiUpdate = 0;
-                const long uiUpdateThreshold = 1024 * 512; // 512KB
-
-                using (var httpStream = await response.Content.ReadAsStreamAsync())
-                using (var fileStream = new FileStream(req.GamePath, FileMode.Create, FileAccess.Write, FileShare.None, buffer.Length, true))
+                try
                 {
-                    while (true)
-                    {
-                        ct.ThrowIfCancellationRequested();
+                using (var request = new HttpRequestMessage(HttpMethod.Get, req.DownloadUrl))
+                {
+                    if (downloaded > 0)
+                        request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(downloaded, null);
 
-                        int read = await httpStream.ReadAsync(buffer, 0, buffer.Length, ct);
-                        if (read <= 0)
+                    using (var response = await HttpClientSingleton.Instance
+                        .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false))
+                    {
+                        int code = (int)response.StatusCode;
+                        if (code >= 500 || code == 408 || code == 429)
+                            throw new TransientDownloadException($"The server answered {code}.");
+                        response.EnsureSuccessStatusCode();
+
+                        // 206 means the server honoured the range and is sending the remainder.
+                        // Anything else is the whole file again, so the download starts over.
+                        bool resumed = downloaded > 0 && response.StatusCode == System.Net.HttpStatusCode.PartialContent;
+                        if (!resumed)
                         {
-                            break;
+                            if (downloaded > 0)
+                                Logger.Info($"The server cannot resume {req.GameName}; its download is starting again.");
+
+                            downloaded = 0;
+                            totalBytes = response.Content.Headers.ContentLength;
                         }
 
-                        await fileStream.WriteAsync(buffer, 0, read, ct);
+                        item.SetProgress(downloaded, totalBytes ?? 1, !totalBytes.HasValue);
 
-                        downloaded += read;
+                        // Progress is reported a few times a second, not per chunk: at LAN speeds a
+                        // byte threshold meant a hundred updates a second, each a dozen property
+                        // changes the UI thread had to take, which left the Store unresponsive.
+                        var uiClock = Stopwatch.StartNew();
 
-                        if (downloaded - lastUiUpdate >= uiUpdateThreshold)
+                        var speedClock = Stopwatch.StartNew();
+                        long speedMark = downloaded;
+
+                        // A connection that goes quiet (no data for StallTimeout) is closed, which
+                        // ends the read below with an error, and the pass is retried.
+                        var sinceData = Stopwatch.StartNew();
+                        bool stalled = false;
+                        using (var watchdog = new Timer(_ =>
                         {
-                            lastUiUpdate = downloaded;
-
-                            if (totalBytes.HasValue && totalBytes.Value > 0)
+                            if (!item.PauseRequested && sinceData.Elapsed > StallTimeout && !stalled)
                             {
-                                item.SetProgress(downloaded, totalBytes.Value, false);
-                                var pct = (double)downloaded / totalBytes.Value * 100.0;
-                                item.SetStatus(DownloadStatus.Downloading, "Downloading... " + pct.ToString("0") + "%");
+                                stalled = true;
+                                try { response.Dispose(); } catch { }
                             }
-                            else
+                        }, null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5)))
+                        using (var httpStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
+                        using (var fileStream = new FileStream(req.GamePath, resumed ? FileMode.Append : FileMode.Create,
+                            FileAccess.Write, FileShare.None, buffer.Length, true))
+                        {
+                            while (true)
                             {
-                                item.SetProgress(downloaded, Math.Max(1, downloaded), true);
-                                item.SetStatus(DownloadStatus.Downloading, "Downloading...");
+                                ct.ThrowIfCancellationRequested();
+
+                                if (item.PauseRequested)
+                                {
+                                    pausedMidway = true;
+                                    break;
+                                }
+
+                                int read;
+                                try
+                                {
+                                    read = await httpStream.ReadAsync(buffer, 0, buffer.Length, ct).ConfigureAwait(false);
+                                }
+                                catch (Exception) when (stalled && !ct.IsCancellationRequested)
+                                {
+                                    throw new TransientDownloadException($"No data from the server for {StallTimeout.TotalSeconds:0} seconds.");
+                                }
+                                if (read <= 0)
+                                {
+                                    break;
+                                }
+                                sinceData.Restart();
+
+                                await fileStream.WriteAsync(buffer, 0, read, ct).ConfigureAwait(false);
+
+                                downloaded += read;
+                                if (downloaded - passStart >= RetryProgressReset)
+                                    failuresInARow = 0;
+
+                                // Rate over the last second or so, so the figure is steady enough to read.
+                                if (speedClock.ElapsedMilliseconds >= 1000)
+                                {
+                                    item.SetSpeed((downloaded - speedMark) / speedClock.Elapsed.TotalSeconds);
+                                    speedMark = downloaded;
+                                    speedClock.Restart();
+                                }
+
+                                if (uiClock.ElapsedMilliseconds >= UiUpdateMs)
+                                {
+                                    uiClock.Restart();
+
+                                    if (totalBytes.HasValue && totalBytes.Value > 0)
+                                    {
+                                        item.SetProgress(downloaded, totalBytes.Value, false);
+                                        var pct = (double)downloaded / totalBytes.Value * 100.0;
+                                        item.SetStatus(DownloadStatus.Downloading, "Downloading... " + pct.ToString("0") + "%");
+                                    }
+                                    else
+                                    {
+                                        item.SetProgress(downloaded, Math.Max(1, downloaded), true);
+                                        item.SetStatus(DownloadStatus.Downloading, "Downloading...");
+                                    }
+                                }
                             }
                         }
                     }
                 }
+
+                // The whole file is here (a short read with a known length is a dropped connection).
+                if (!pausedMidway && totalBytes.HasValue && totalBytes.Value > 0 && downloaded < totalBytes.Value)
+                    throw new TransientDownloadException($"The connection closed at {downloaded} of {totalBytes.Value} bytes.");
+                }
+                catch (Exception ex) when (!ct.IsCancellationRequested && IsTransient(ex))
+                {
+                    item.SetSpeed(0);
+                    failuresInARow++;
+                    if (failuresInARow > RetryLimit)
+                    {
+                        Logger.Warn($"{req.GameName}: giving up after {RetryLimit} retries without progress: {ex.Message}");
+                        throw;
+                    }
+                    // What reached the disk is kept, and the next pass asks for the rest.
+                    try { downloaded = File.Exists(req.GamePath) ? new FileInfo(req.GamePath).Length : 0; } catch { }
+                    TimeSpan wait = TimeSpan.FromSeconds(Math.Min(30, 1 << Math.Min(failuresInARow, 5)));
+                    Logger.Warn($"{req.GameName}: download interrupted at {downloaded} bytes ({ex.GetType().Name}: {ex.Message}); " +
+                                $"retry {failuresInARow} of {RetryLimit} in {wait.TotalSeconds:0}s.");
+                    item.SetStatus(DownloadStatus.Downloading, $"Connection lost, retrying in {wait.TotalSeconds:0}s ({failuresInARow}/{RetryLimit})...");
+                    await Task.Delay(wait, ct).ConfigureAwait(false);
+                    continue;
+                }
+
+                item.SetSpeed(0);
+
+                if (!pausedMidway)
+                    break;
             }
 
             // Extract if needed (we treat extract as 0..100 in its own bar)
@@ -197,16 +396,35 @@ namespace RomM.Downloads
             // Build rom list + signal installed
             var roms = req.BuildRoms != null ? req.BuildRoms() : null;
 
+            // Finished: at the front of Recent Games, and listed under Completed on the Downloads
+            // page. Marked before the game is set installed, so the shelves redrawn for that
+            // already have it at the front.
+            Recent?.Mark(item.GameId);
+
             req.OnInstalled?.Invoke(new GameInstalledEventArgs(new GameInstallationData
             {
                 InstallDirectory = req.InstallDir,
                 Roms = roms
             }));
+
+            try
+            {
+                Finished?.Invoke(item.GameId);
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"[Downloads] A finished-download listener failed: {ex.Message}");
+            }
         }
+
+        // What is unpacked after downloading: archives by their extension, and then only when they
+        // really are one. Disc images are left alone, whatever SharpCompress makes of them -- it
+        // took a Wii .wbfs for an archive, "extracted" it to nothing, and the install failed.
+        private static readonly string[] ArchiveExtensions = { ".zip", ".7z", ".rar", ".tar", ".gz", ".tgz", ".bz2", ".tbz2", ".xz", ".txz" };
 
         private static bool IsFileCompressed(string filePath)
         {
-            if (Path.GetExtension(filePath).Equals(".iso", StringComparison.OrdinalIgnoreCase))
+            if (!ArchiveExtensions.Contains(Path.GetExtension(filePath), StringComparer.OrdinalIgnoreCase))
             {
                 return false;
             }
@@ -279,6 +497,7 @@ namespace RomM.Downloads
                 var entries = archive.Entries.Where(e => !e.IsDirectory).ToList();
                 int total = entries.Count;
                 int done = 0;
+                var uiClock = Stopwatch.StartNew();
 
                 item.SetProgress(0, Math.Max(1, total), false);
 
@@ -299,9 +518,15 @@ namespace RomM.Downloads
                     }
 
                     done++;
-                    item.SetProgress(done, total, false);
-                    var pct = total > 0 ? (double)done / total * 100.0 : 100.0;
-                    item.SetStatus(DownloadStatus.Extracting, "Extracting... " + pct.ToString("0") + "%");
+                    // A few times a second (and at the end): archives of thousands of small files
+                    // would otherwise report thousands of times a second.
+                    if (done == total || uiClock.ElapsedMilliseconds >= UiUpdateMs)
+                    {
+                        uiClock.Restart();
+                        item.SetProgress(done, total, false);
+                        var pct = total > 0 ? (double)done / total * 100.0 : 100.0;
+                        item.SetStatus(DownloadStatus.Extracting, "Extracting... " + pct.ToString("0") + "%");
+                    }
                 }
             }
         }

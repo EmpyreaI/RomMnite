@@ -30,7 +30,10 @@ namespace RomM.Games
             // RomM 4.9+ can omit these fields; normalise so the metadata mapping never null-derefs.
             romMGame.Normalize();
 
-            return RomMMetadataMapper.BuildBaseMetadata(romMGame, _romM.Settings.RomMHost, _romM.Playnite.ApplicationSettings.AgeRatingOrgPriority.ToString());
+            var metadata = RomMMetadataMapper.BuildBaseMetadata(romMGame, _romM.Settings.RomMHost, _romM.Playnite.ApplicationSettings.AgeRatingOrgPriority.ToString(),
+                RomMMediaProbe.For(_romM.Settings.RomMHost, System.Threading.CancellationToken.None));
+            RomMIconNormalizer.Apply(metadata, romMGame, _romM.Settings.RomMHost, _romM.Logger, System.Threading.CancellationToken.None);
+            return metadata;
         }
     }
 }

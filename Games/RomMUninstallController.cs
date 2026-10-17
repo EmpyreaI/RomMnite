@@ -19,6 +19,24 @@ namespace RomM.Games
             _mapping = mapping;
         }
 
+        // Installed to another install location: a folder of its own under that location's folder
+        // for the platform (<location>\<platform folder>\<game>), the platform folder itself not.
+        private bool InOtherLocation(string installDir)
+        {
+            string platformFolder = Path.GetFileName((_mapping?.DestinationPath ?? "").TrimEnd('\\', '/'));
+            if (string.IsNullOrEmpty(platformFolder) || string.IsNullOrEmpty(installDir))
+                return false;
+            string dir = installDir.TrimEnd('\\', '/');
+            foreach (string root in _romM.InstallRoots ?? new System.Collections.Generic.List<string>())
+            {
+                string platformDir = Path.Combine(root, platformFolder);
+                if (RomMInstallPaths.IsInside(platformDir, dir)
+                    && !string.Equals(Path.GetFullPath(platformDir).TrimEnd('\\', '/'), Path.GetFullPath(dir), System.StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
+        }
+
         public override void Uninstall(UninstallActionArgs args)
         {
             // A portable Playnite records these with the "{PlayniteDir}" token, which no filesystem
@@ -36,7 +54,7 @@ namespace RomM.Games
                 .Where(g => g.Id != Game.Id && !string.IsNullOrEmpty(g.InstallDirectory))
                 .Select(g => PlaynitePath.Resolve(_romM.Playnite, g.InstallDirectory));
 
-            if (RomMInstallPaths.IsInside(_mapping?.DestinationPathResolved, installDir)
+            if ((RomMInstallPaths.IsInside(_mapping?.DestinationPathResolved, installDir) || InOtherLocation(installDir))
                 && !RomMInstallPaths.IsClaimedByAnother(installDir, otherInstallDirs))
             {
                 if (new DirectoryInfo(installDir).Exists)

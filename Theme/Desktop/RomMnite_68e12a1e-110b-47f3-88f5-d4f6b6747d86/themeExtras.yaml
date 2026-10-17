@@ -1,0 +1,9 @@
+ThemeId: RomMnite_68e12a1e-110b-47f3-88f5-d4f6b6747d86
+PersistentPaths:
+- Images/Banners
+- Images/Icons
+BannersBySpecIdPath: Images/Banners/PlatformSpecId
+BannersByPlatformNamePath: Images/Banners/PlatformName
+BannersByPluginIdPath: Images/Banners/PluginId
+DefaultBannerPath: Images/Banners/UnknownLibrary.png
+BannerDecodeHeight: 75

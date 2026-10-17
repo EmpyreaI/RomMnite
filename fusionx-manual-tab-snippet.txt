@@ -1,0 +1,23 @@
+FusionX theme edit: a Manual tab for RomM games
+===============================================
+
+Back up the file before editing. Restart Playnite afterwards.
+
+File: Views\DetailsViewGameOverview.xaml   (inside your installed theme folder)
+
+Find the Achievements tab, which begins with this line:
+
+    <TabItem Header="{DynamicResource LOCSuccessStoryAchievements}" FontSize="16"
+
+Paste this block directly ABOVE that line, so Manual sits just before Achievements:
+
+    <TabItem Header="Manual" FontSize="16"
+            Visibility="{PluginSettings Plugin=RomM, Path=ManualVisible, FallbackValue=Collapsed, Converter={StaticResource BooleanToVisibilityConverter}}">
+        <StackPanel Margin="0,24,0,0">
+            <ContentControl x:Name="RomM_ManualViewer" Margin="0,0,0,24" Focusable="False" />
+        </StackPanel>
+    </TabItem>
+
+The tab appears only for RomM games that have a PDF manual.
+
+To undo, delete the pasted block (or restore your backup).

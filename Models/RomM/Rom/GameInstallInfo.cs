@@ -14,6 +14,8 @@ namespace RomM.Models.RomM.Rom
         public string PlayableFile { get; set; }
         public string DownloadURL { get; set; }
         public EmulatorMapping Mapping { get; set; }
+        /// <summary>Where the game goes in place of the mapping's folder (another install location), or null.</summary>
+        public string InstallRoot { get; set; }
 
         public static GameInstallInfo From(RomMRevision revision, EmulatorMapping mapping)
             => new GameInstallInfo

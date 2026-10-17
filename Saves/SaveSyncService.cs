@@ -1,4 +1,4 @@
-﻿using Newtonsoft.Json;
+using Newtonsoft.Json;
 using Playnite.SDK;
 using Playnite.SDK.Models;
 using RomM.Games;
@@ -28,7 +28,7 @@ namespace RomM.Saves
     /// an <see cref="ISaveHandler"/>; this class only moves bytes. RetroArch is the handler that
     /// exists today.
     /// </summary>
-    internal class SaveSyncService
+    internal partial class SaveSyncService
     {
         private const string DeviceClient = "playnite";
 
@@ -55,11 +55,235 @@ namespace RomM.Saves
             _romM = romM;
         }
 
+        /// <summary>
+        /// Whether the save on disk for a game may be synced as the signed-in account's. Unset:
+        /// always. When it says no, the save on disk is another account's (see SaveAccounts) and
+        /// is neither uploaded nor replaced until that game is launched and the saves swapped.
+        /// </summary>
+        public Func<Game, bool> MayUseLocalSave { get; set; }
+
+        /// <summary>Where a game's save is, for SaveAccounts; null with a reason when unknown.</summary>
+        internal SaveTarget TargetFor(Game game, out string reason) => ResolveTarget(game, out reason);
+
+        /// <summary>The emulator a game launches with (and the save handler for it, if any).</summary>
+        internal SaveEmulatorResolution EmulatorFor(Game game) => ResolveEmulator(game);
+
+        /// <summary>The lock syncs of this ROM hold, so a swap does not run under one.</summary>
+        internal object LockFor(int romId) => _romLocks.GetOrAdd(romId, _ => new object());
+
         private ILogger Logger => _romM.Logger;
         private SettingsViewModel Settings => _romM.Settings;
 
+        // Cloud saves are on for every RomM game, unless switched off for it.
+        private bool SyncsSaves(Game game) => _romM.SaveSyncOff?.IsOn(game) != false;
+
         /// <summary>The emulators sync covers today, for the message shown when none applied.</summary>
         public string SupportedEmulators => string.Join(", ", _handlers.SupportedEmulatorTags);
+
+        #region Cloud status
+
+        private readonly ConcurrentDictionary<Guid, byte> _syncing = new ConcurrentDictionary<Guid, byte>();
+        private CloudStatusStore _statusStore;
+
+        private CloudStatusStore StatusStore => _statusStore ?? (_statusStore = new CloudStatusStore(
+            Path.Combine(_romM.Playnite.Paths.ExtensionsDataPath, _romM.Id.ToString(), "cloud-status.json")));
+
+        /// <summary>Raised with a game's id whenever its cloud save status may have changed.</summary>
+        public event Action<Guid> StatusChanged;
+
+        private void RaiseStatusChanged(Guid gameId)
+        {
+            try
+            {
+                StatusChanged?.Invoke(gameId);
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"[SaveSync] A cloud status listener failed: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// The cloud save status to show for a game: a short headline and a longer detail line.
+        /// Both are null when cloud saves do not apply to it -- not a RomM game, the option is
+        /// off, or its emulator is not one whose saves can be synced.
+        /// </summary>
+        public void DescribeStatus(Game game, out string headline, out string detail)
+        {
+            headline = null;
+            detail = null;
+
+            try
+            {
+                if (game == null || game.PluginId != _romM.Id || !SyncsSaves(game))
+                    return;
+                if (!SavesSupported(game, ResolveEmulator(game), out bool known))
+                {
+                    if (!known)
+                        return;
+                    headline = "Not supported for this platform";
+                    detail = "Cloud saves are not supported for this platform: its emulator's saves cannot be synced with RomM.";
+                    return;
+                }
+
+                if (_syncing.ContainsKey(game.Id))
+                {
+                    headline = "Syncing...";
+                    detail = "Cloud saves are syncing with RomM.";
+                    return;
+                }
+
+                if (HasUnsyncedProgress(game.Id))
+                {
+                    headline = "Waiting to sync";
+                    detail = "Progress saved while RomM couldn't be reached. It's kept on this computer and uploads as soon as RomM is back.";
+                    return;
+                }
+
+                var last = StatusStore.Get(game.Id);
+                if (last == null)
+                {
+                    headline = "Not synced yet";
+                    detail = "This game's saves have not been synced with RomM from this computer.";
+                    return;
+                }
+
+                string when = last.LastSyncUtc.ToLocalTime().ToString("g");
+                if (!string.IsNullOrEmpty(last.Headline))
+                {
+                    headline = last.Headline;
+                    detail = string.IsNullOrEmpty(last.Detail) ? $"Last checked {when}." : $"{last.Detail} Last checked {when}.";
+                    return;
+                }
+
+                if (last.Ok)
+                {
+                    headline = "Up to date";
+                    detail = $"Last synced with RomM {when}.";
+                }
+                else
+                {
+                    headline = "Sync failed";
+                    detail = string.IsNullOrEmpty(last.Message)
+                        ? $"The last sync, {when}, failed. See extensions.log."
+                        : $"The last sync, {when}, failed: {last.Message}";
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"[SaveSync] Could not work out the cloud status of {game?.Name}: {ex.Message}");
+            }
+        }
+
+        /// <summary>When the game's saves were last synced with RomM without a problem, if ever (on this computer).</summary>
+        public DateTime? LastSyncedUtc(Guid gameId)
+        {
+            try
+            {
+                var last = StatusStore.Get(gameId);
+                return last != null && last.Ok && string.IsNullOrEmpty(last.Headline) ? last.LastSyncUtc : (DateTime?)null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Whether the game's saves can be synced. known: whether that could be told -- a game
+        /// whose platform has no emulator set up yet is told by the emulator setting it up would
+        /// install (none: the platform is not supported here at all); a Windows game not set up
+        /// yet is not told (its saves go through Ludusavi once it is).
+        /// </summary>
+        private bool SavesSupported(Game game, SaveEmulatorResolution resolution, out bool known)
+        {
+            known = true;
+            if (resolution.Emulator != null)
+                return resolution.Handler != null && !RetroArchSaveHandler.WritesNoSaves(resolution.Handler, resolution.Profile);
+
+            Models.RomM.Platform.RomMPlatform platform = _romM.KnownPlatformOf(game);
+            if (platform == null || Setup.EmulatorSetup.IsWindowsPlatform(platform) || _romM.EmulatorSetup == null)
+            {
+                known = false;
+                return true;
+            }
+            Setup.EmulatorSetup.Plan plan = _romM.EmulatorSetup.PlanFor(platform.Id);
+            if (plan == null)
+                return false;   // no emulator for the platform: UNSUPPORTED PLATFORM in the store
+            ISaveHandler handler = _handlers.Find(new Emulator(plan.Definition.Name) { BuiltInConfigId = plan.Definition.Id });
+            if (handler == null)
+                return false;
+            if (handler is RetroArchSaveHandler && plan.Core != null)
+                return !RetroArchSaveHandler.CoreWritesNoSaves(plan.Core);
+            return true;
+        }
+
+        #endregion
+
+        #region Play sessions
+
+        // When each running game was launched, and the watcher on its save directory.
+        private readonly ConcurrentDictionary<Guid, DateTime> _sessionStarts = new ConcurrentDictionary<Guid, DateTime>();
+        private readonly ConcurrentDictionary<Guid, SaveWatch> _watches = new ConcurrentDictionary<Guid, SaveWatch>();
+
+        /// <summary>
+        /// Call once the pre-launch sync is done and the game is about to run. Stamps the session
+        /// and, where the save can be watched, uploads it each time the game writes a new one.
+        /// Uploads only: nothing is ever downloaded over a save the emulator has open.
+        /// </summary>
+        public void BeginSession(Game game)
+        {
+            try
+            {
+                if (game == null || game.PluginId != _romM.Id || !SyncsSaves(game))
+                    return;
+
+                _sessionStarts[game.Id] = DateTime.UtcNow;
+
+                string directory = ResolveTarget(game, out string reason)?.WatchDirectory;
+                if (string.IsNullOrEmpty(directory))
+                {
+                    Logger.Info($"[SaveSync] {game.Name}: not watching for saves during play. " +
+                                (reason ?? "This emulator's saves are only synced at launch and close."));
+                    return;
+                }
+
+                Directory.CreateDirectory(directory);
+                var watch = new SaveWatch(directory, () => Sync(game, default(CancellationToken), allowDownload: false));
+                _watches.AddOrUpdate(game.Id, watch, (id, previous) =>
+                {
+                    previous.Dispose();
+                    return watch;
+                });
+                Logger.Info($"[SaveSync] Watching {directory} for new saves while {game.Name} runs.");
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"[SaveSync] Could not watch saves for {game?.Name}: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Call when the game has stopped: stops watching, runs the closing sync, then forgets the
+        /// session so a later sync does not mistake another game's saves for this one's.
+        /// </summary>
+        public SyncOutcome EndSession(Game game)
+        {
+            if (game != null && _watches.TryRemove(game.Id, out SaveWatch watch))
+                watch.Dispose();
+
+            try
+            {
+                return Sync(game);
+            }
+            finally
+            {
+                if (game != null)
+                    _sessionStarts.TryRemove(game.Id, out DateTime _);
+            }
+        }
+
+        #endregion
 
         public class SyncOutcome
         {
@@ -69,6 +293,46 @@ namespace RomM.Saves
             public int Conflicts { get; set; }
             public int Failed { get; set; }
             public string Message { get; set; }
+            // A standing problem reported by the save itself; see SaveTarget.StatusHeadline.
+            public string StatusHeadline { get; set; }
+            public string StatusDetail { get; set; }
+        }
+
+        /// <summary>Where the Ludusavi working folders and custom game names are kept.</summary>
+        internal string LudusaviDirectory => Path.Combine(_romM.Playnite.Paths.ExtensionsDataPath, _romM.Id.ToString(), "Ludusavi");
+
+        /// <summary>Whether this game's saves are handled through Ludusavi.</summary>
+        public bool UsesLudusavi(Game game)
+        {
+            try
+            {
+                return game != null && game.PluginId == _romM.Id && ResolveEmulator(game).Handler is Handlers.LudusaviSaveHandler;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public string GetLudusaviTitle(Game game) => LudusaviTitles.Get(LudusaviDirectory, game.Id);
+
+        public void SetLudusaviTitle(Game game, string title)
+        {
+            LudusaviTitles.Set(LudusaviDirectory, game.Id, title);
+
+            // Drop the local backup copy made under the old name: it may hold a different game's
+            // saves, and everything in that folder is treated as this game's. Ludusavi rebuilds
+            // it on the next sync. The actual saves are not in this folder and are not touched.
+            try
+            {
+                string workDir = Path.Combine(LudusaviDirectory, game.Id.ToString());
+                if (Directory.Exists(workDir))
+                    Directory.Delete(workDir, true);
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"[SaveSync] Could not clear the old Ludusavi backup of {game.Name}: {ex.Message}");
+            }
         }
 
         /// <summary>
@@ -79,13 +343,50 @@ namespace RomM.Saves
         /// which is what the launch path needs: an unreachable RomM would otherwise cost the
         /// HTTP client's default timeout per request before the game is allowed to start.
         /// </summary>
-        public SyncOutcome Sync(Game game, CancellationToken cancellationToken = default(CancellationToken))
+        public SyncOutcome Sync(Game game, CancellationToken cancellationToken = default(CancellationToken), bool allowDownload = true)
+        {
+            // Background loading (the Store's, the artwork's) waits while saves sync.
+            using (Foreground.Busy())
+                return SyncTracked(game, cancellationToken, allowDownload);
+        }
+
+        private SyncOutcome SyncTracked(Game game, CancellationToken cancellationToken, bool allowDownload)
+        {
+            bool tracked = game != null && game.PluginId == _romM.Id && SyncsSaves(game);
+            if (tracked)
+            {
+                _syncing[game.Id] = 0;
+                RaiseStatusChanged(game.Id);
+            }
+
+            var outcome = SyncCore(game, cancellationToken, allowDownload);
+
+            if (tracked)
+            {
+                _syncing.TryRemove(game.Id, out byte _);
+                if (outcome.Applicable || outcome.Failed > 0)
+                    StatusStore.Record(game.Id, outcome.Failed == 0, outcome.Message, outcome.StatusHeadline, outcome.StatusDetail);
+                // Offline: noted to sync once RomM is back (SaveSyncService.Offline).
+                NoteOutcome(game, outcome, allowDownload);
+                RaiseStatusChanged(game.Id);
+            }
+
+            return outcome;
+        }
+
+        private SyncOutcome SyncCore(Game game, CancellationToken cancellationToken, bool allowDownload)
         {
             var outcome = new SyncOutcome();
             try
             {
-                if (game == null || game.PluginId != _romM.Id || !Settings.EnableSaveSync)
+                if (game == null || game.PluginId != _romM.Id)
                 {
+                    return outcome;
+                }
+
+                if (!SyncsSaves(game))
+                {
+                    Logger.Info($"[SaveSync] {game.Name}: skipped, cloud saves are off for this game.");
                     return outcome;
                 }
 
@@ -95,16 +396,32 @@ namespace RomM.Saves
                     return outcome;
                 }
 
+                if (MayUseLocalSave != null && !MayUseLocalSave(game))
+                {
+                    Logger.Info($"[SaveSync] {game.Name}: skipped, the save on this computer is another account's. " +
+                                "It is swapped for this account's when the game is launched.");
+                    outcome.Message = "The save on this computer is another account's; launch the game to switch to yours.";
+                    return outcome;
+                }
+
                 lock (_romLocks.GetOrAdd(romId, _ => new object()))
                 {
                     var target = ResolveTarget(game, out string reason);
                     if (target == null)
                     {
+                        Logger.Info($"[SaveSync] {game.Name}: skipped, {reason}");
                         outcome.Message = reason;
                         return outcome;
                     }
 
+                    Logger.Info($"[SaveSync] {game.Name}: {target.EmulatorTag}, local save {(target.Exists ? "found" : "not found")}, " +
+                                $"{target.Describe()}{(allowDownload ? "" : " (game running: upload only)")}");
+
                     outcome.Applicable = true;
+
+                    // Known by now: the line above has already made the target look at the save.
+                    outcome.StatusHeadline = target.StatusHeadline;
+                    outcome.StatusDetail = target.StatusDetail;
 
                     var deviceId = EnsureDeviceRegistered(cancellationToken);
                     if (string.IsNullOrEmpty(deviceId))
@@ -126,9 +443,21 @@ namespace RomM.Saves
                     // device). We only resolved a local path for THIS game, so apply only its operations;
                     // other ROMs are handled when their own games sync.
                     var operations = negotiation.Operations ?? new List<RomMSyncOperation>();
+                    var mine = operations.Where(o => o.RomId == romId).ToList();
+                    Logger.Info($"[SaveSync] {game.Name}: RomM answered with {operations.Count} operations, " +
+                                $"{mine.Count} for this game: {(mine.Count == 0 ? "nothing to do" : string.Join(", ", mine.Select(o => o.Action)))}");
                     foreach (var op in operations.Where(o => o.RomId == romId))
                     {
-                        ApplyOperation(op, deviceId, negotiation.SessionId, target, outcome, cancellationToken);
+                        ApplyOperation(op, deviceId, negotiation.SessionId, target, outcome, cancellationToken, allowDownload);
+                    }
+
+                    // No local save, and negotiate offered none. RomM reads a save this device
+                    // already synced and no longer has as deleted on purpose, and only servers
+                    // from 5.4.0 on can be asked not to. Here a missing save means lost, so the
+                    // slot's newest save is fetched directly.
+                    if (allowDownload && !target.Exists && outcome.Downloaded == 0 && outcome.Failed == 0)
+                    {
+                        RestoreMissing(game, romId, deviceId, negotiation.SessionId, target, outcome, cancellationToken);
                     }
 
                     CompleteSession(negotiation.SessionId,
@@ -160,7 +489,14 @@ namespace RomM.Saves
 
         private RomMSyncNegotiateResponse Negotiate(string deviceId, int romId, SaveTarget target, CancellationToken ct)
         {
-            var payload = new RomMSyncNegotiatePayload { DeviceId = deviceId };
+            // A save missing here is treated as lost, not deleted: RomM is the source of truth,
+            // so it is restored. Removing a save for good means deleting it in RomM as well.
+            var payload = new RomMSyncNegotiatePayload
+            {
+                DeviceId = deviceId,
+                RomIds = new List<int> { romId },
+                RestoreUnlisted = true,
+            };
 
             if (target.Exists)
             {
@@ -202,7 +538,7 @@ namespace RomM.Saves
 
         #region Operation handling
 
-        private void ApplyOperation(RomMSyncOperation op, string deviceId, int sessionId, SaveTarget target, SyncOutcome outcome, CancellationToken ct)
+        private void ApplyOperation(RomMSyncOperation op, string deviceId, int sessionId, SaveTarget target, SyncOutcome outcome, CancellationToken ct, bool allowDownload = true)
         {
             try
             {
@@ -213,6 +549,19 @@ namespace RomM.Saves
                 {
                     outcome.Conflicts++;
                     action = ResolveConflict(op, target);
+                    // Both sides moved on: the one about to be replaced is kept first.
+                    if (action == RomMSyncAction.Download && allowDownload)
+                        KeepLosingSide(op, target, serverWins: true, ct: ct);
+                    else if (action == RomMSyncAction.Upload)
+                        KeepLosingSide(op, target, serverWins: false, ct: ct);
+                }
+
+                // While the game is running the emulator owns the save: replacing it underneath
+                // would be ignored at best and corrupt it at worst.
+                if (action == RomMSyncAction.Download && !allowDownload)
+                {
+                    Logger.Info($"[SaveSync] Skipping a download for rom {op.RomId} while the game is running.");
+                    return;
                 }
 
                 switch (action)
@@ -245,6 +594,71 @@ namespace RomM.Saves
             catch (Exception ex)
             {
                 Logger.Error(ex, $"[SaveSync] Operation '{op.Action}' failed for save {op.SaveId} (rom {op.RomId}).");
+                outcome.Failed++;
+            }
+        }
+
+        /// <summary>
+        /// Downloads the newest save RomM holds in this target's slot, for a game with no local
+        /// save at all. A save written by a different emulator is left alone: its format would
+        /// not be one this target can unpack.
+        /// </summary>
+        private void RestoreMissing(Game game, int romId, string deviceId, int sessionId, SaveTarget target, SyncOutcome outcome, CancellationToken ct)
+        {
+            try
+            {
+                var url = RomMUrl.Combine(Settings.RomMHost,
+                    $"api/saves?rom_id={romId}&slot={WebUtility.UrlEncode(target.Slot)}");
+
+                List<RomMServerSave> saves;
+                using (var response = HttpClientSingleton.Instance.GetAsync(url, ct).GetAwaiter().GetResult())
+                {
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        Logger.Warn($"[SaveSync] {game.Name}: could not list its saves on RomM (HTTP {(int)response.StatusCode}).");
+                        return;
+                    }
+
+                    var body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                    saves = JsonConvert.DeserializeObject<List<RomMServerSave>>(body, JsonSettings) ?? new List<RomMServerSave>();
+                }
+
+                var newest = saves
+                    .Where(s => s != null && string.Equals(s.Slot, target.Slot, StringComparison.OrdinalIgnoreCase))
+                    .Where(s => string.IsNullOrEmpty(s.Emulator)
+                                || string.Equals(s.Emulator, target.EmulatorTag, StringComparison.OrdinalIgnoreCase))
+                    .OrderByDescending(s => s.UpdatedAt ?? DateTime.MinValue)
+                    .FirstOrDefault();
+
+                if (newest == null)
+                {
+                    Logger.Info($"[SaveSync] {game.Name}: no local save, and RomM has none to restore " +
+                                $"({saves.Count} listed for this game in slot \"{target.Slot}\").");
+                    return;
+                }
+
+                Logger.Info($"[SaveSync] {game.Name}: no local save; restoring save {newest.Id} from RomM.");
+
+                var op = new RomMSyncOperation
+                {
+                    Action = RomMSyncAction.Download,
+                    RomId = romId,
+                    SaveId = newest.Id,
+                    ServerUpdatedAt = newest.UpdatedAt,
+                };
+
+                if (Download(op, deviceId, sessionId, target, ct))
+                    outcome.Downloaded++;
+                else
+                    outcome.Failed++;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error(ex, $"[SaveSync] {game.Name}: restoring its save from RomM failed.");
                 outcome.Failed++;
             }
         }
@@ -404,6 +818,7 @@ namespace RomM.Saves
 
                     Settings.SaveSyncDeviceId = created.DeviceId;
                     Settings.SaveSyncDeviceHost = host;
+                    Settings.SaveSyncDeviceMachine = Environment.MachineName;
                     Settings.Persist();
                     Logger.Info($"[SaveSync] Registered device '{created.DeviceId}' with RomM.");
                     return created.DeviceId;
@@ -423,7 +838,8 @@ namespace RomM.Saves
         private bool HasDeviceFor(string host)
         {
             return !string.IsNullOrEmpty(Settings.SaveSyncDeviceId)
-                   && string.Equals(Settings.SaveSyncDeviceHost, host, StringComparison.OrdinalIgnoreCase);
+                   && string.Equals(Settings.SaveSyncDeviceHost, host, StringComparison.OrdinalIgnoreCase)
+                   && string.Equals(Settings.SaveSyncDeviceMachine, Environment.MachineName, StringComparison.OrdinalIgnoreCase);
         }
 
         #endregion
@@ -451,7 +867,7 @@ namespace RomM.Saves
             if (resolution.Emulator == null)
             {
                 reason = $"{game.Name} has no emulator set. Choose one in the game's Actions, " +
-                         "or map its platform under RomM settings.";
+                         "or map its platform under RomMnite settings.";
                 return null;
             }
 
@@ -474,18 +890,21 @@ namespace RomM.Saves
                             $"using {resolution.Emulator.Name} from its RomM platform mapping instead.");
             }
 
-            var target = resolution.Handler.ResolveTarget(new SaveTargetRequest
+            var request = new SaveTargetRequest
             {
                 Game = game,
                 EmulatorInstallDir = PlaynitePath.Resolve(_romM.Playnite, resolution.Emulator.InstallDir),
                 Profile = resolution.Profile,
                 ContentPath = _romM.Playnite.ExpandGameVariables(game, contentPath),
+                DataDirectory = Path.Combine(_romM.Playnite.Paths.ExtensionsDataPath, _romM.Id.ToString(), "SaveFolders"),
+                SessionStartUtc = _sessionStarts.TryGetValue(game.Id, out DateTime sessionStart) ? sessionStart : (DateTime?)null,
                 Logger = Logger,
-            });
+            };
+            var target = resolution.Handler.ResolveTarget(request);
 
             if (target == null)
             {
-                reason = $"Could not work out where {resolution.Emulator.Name} keeps this game's saves.";
+                reason = request.Reason ?? $"Could not work out where {resolution.Emulator.Name} keeps this game's saves.";
             }
 
             return target;

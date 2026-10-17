@@ -1,15 +1,17 @@
-name: Build and Package Extension
+name: Build and Release
+
+# Pushing a version tag (1.0.0, 1.0.1, ...) builds the extension, packs it with Playnite's
+# Toolbox and publishes a GitHub release with the .pext attached. The tag must match Version
+# in extension.yaml and RomM.csproj (the tests check those two agree).
 
 on:
   push:
     tags:
       - "[0-9]+.[0-9]+.[0-9]+*"
+  workflow_dispatch:
 
 permissions:
   contents: write
-  id-token: write
-  packages: write
-  actions: write
 
 jobs:
   build:
@@ -26,27 +28,34 @@ jobs:
         with:
           dotnet-version: 9.0.x
 
-      - name: Restore dependencies
-        run: |
-          dotnet restore --locked-mode
-          dotnet add package Microsoft.Net.Sdk.Compilers.Toolset --version 9.0.300
+      - name: Compiler toolset
+        run: dotnet add RomM.csproj package Microsoft.Net.Sdk.Compilers.Toolset --version 9.0.300
 
-      - name: Build with MSBuild
-        run: |
-          msbuild RomM.csproj /p:Configuration=Release /p:Platform="AnyCPU" /p:RestorePackages=false
+      # The same build as a local one (DEVELOPMENT.md).
+      - name: Build
+        run: msbuild RomM.csproj /restore /p:Configuration=Release /p:Platform="AnyCPU" /p:CopyLocalLockFileAssemblies=true
 
-      - name: Setup Playnite
+      - name: Setup Playnite (for its Toolbox)
         run: |
           Invoke-WebRequest -Uri "https://github.com/JosefNemec/Playnite/releases/download/10.35/Playnite1035.zip" -OutFile "Playnite.zip"
           Expand-Archive "Playnite.zip" -DestinationPath "Playnite"
 
-      - name: Pack with Playnite
+      - name: Pack
         run: |
           mkdir .\PackingOutput
           & "Playnite\Toolbox.exe" pack .\bin\Release\net462 .\PackingOutput
+          Get-ChildItem .\PackingOutput
 
-      - name: Upload Artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: packed-extension
-          path: PackingOutput
+          name: RomMnite
+          path: PackingOutput/*.pext
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: RomMnite ${{ github.ref_name }}
+          body_path: CHANGELOG.md
+          files: PackingOutput/*.pext
