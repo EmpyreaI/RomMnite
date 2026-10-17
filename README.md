@@ -6,8 +6,8 @@
   <h3 style="font-size: 25px;">RomMnite: a Steam-like Playnite for your RomM server.</h3>
   <p>Created by Empyreai. Based on the <a href="https://github.com/rommapp/playnite-plugin">RomM Library Importer</a> by The RomM Team.</p>
 
-[![license-badge-img]][license-badge]
-[![release-badge-img]][release-badge]
+[license-badge-img]: https://img.shields.io/badge/license-GPL--3.0-a32d2a?style=for-the-badge
+[release-badge-img]: https://img.shields.io/github/v/release/EmpyreaI/RomMnite?style=for-the-badge&include_prereleases
 
 </div>
 
