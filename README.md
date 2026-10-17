@@ -25,7 +25,11 @@ RomMnite turns [Playnite](https://playnite.link) into a Steam-like home for your
 
 # Screenshots
 
-The Store: a game's page, with its trailer, screenshots, reviews and details.
+The Store's Home: featured games, today's anniversaries and the game of the day.
+
+![The RomMnite Store's Home](.github/resources/store-home.png)
+
+A game's page: with its trailer, screenshots, reviews and details.
 
 ![The RomMnite Store](.github/resources/store.png)
 
