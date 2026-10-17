@@ -37,6 +37,10 @@ The library: the same game once added, with its cloud save status and news.
 
 ![The RomMnite library](.github/resources/library.png)
 
+Built-in emulator support: integrated with emulation status lists, easily apply patches to your games.
+
+![A game's page in the RomMnite library](.github/resources/library-game.png)
+
 # Requirements
 
 - Windows with Playnite 10 (Playnite SDK 6.18 or newer).
