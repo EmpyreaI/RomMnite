@@ -56,7 +56,7 @@ Built-in emulator support: integrated with emulation status lists, easily apply 
 # Building
 
 ```
-msbuild RomM.csproj /restore /p:Configuration=Release /p:Platform="AnyCPU" /p:CopyLocalLockFileAssemblies=true
+msbuild RomMnite.csproj /restore /p:Configuration=Release /p:Platform="AnyCPU" /p:CopyLocalLockFileAssemblies=true
 Toolbox.exe pack bin\Release\net462 <output folder>
 ```
 
