@@ -4,7 +4,7 @@
 
   <img src=".github/resources/isotipo.png" height="180px" width="auto" alt="RomMnite logo">
   <h3 style="font-size: 25px;">RomMnite: a Steam-like Playnite for your RomM server.</h3>
-  <p>Created by Empyreai. Based on the <a href="https://github.com/rommapp/playnite-plugin">RomM Library Importer</a> by The RomM Team.</p>
+  <p>Created by Empyreal. Based on the <a href="https://github.com/rommapp/playnite-plugin">RomM Library Importer</a> by The RomM Team.</p>
 
 [![license-badge-img]][license-badge]
 [![release-badge-img]][release-badge]
