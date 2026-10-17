@@ -8,13 +8,11 @@ SourceUrl: https://github.com/Empyreai/RomMnite
 Description: |
   RomMnite, created by Empyreai, turns Playnite into a Steam-like home for your RomM server: your library, a store to browse the server, emulators set up for you, cloud saves, achievements and an in-game overlay.
 
-  Based on the RomM Library Importer by The RomM Team (https://github.com/rommapp/playnite-plugin), whose work it builds on.
+  Based on the RomM Library Importer by The RomM Team (https://github.com/rommapp/playnite-plugin).
 
   Installing a game in Playnite will download it from RomM and store it on your system, allowing you to launch it in your emulator of choice.
 Tags: [romm, emulation, retro]
 IconUrl: https://raw.githubusercontent.com/Empyreai/RomMnite/main/icon.png
-Links:
-  Issues: https://github.com/Empyreai/RomMnite/issues/new
 Screenshots:
   - Thumbnail: https://raw.githubusercontent.com/Empyreai/RomMnite/main/.github/resources/screenshot_sm.png
     Image: https://raw.githubusercontent.com/Empyreai/RomMnite/main/.github/resources/screenshot_lg.png

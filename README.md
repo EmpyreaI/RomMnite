@@ -58,7 +58,7 @@ Pushing a version tag (for example `1.0.1`) builds and publishes a release with 
 
 # Support
 
-Problems with RomMnite: [open an issue](https://github.com/Empyreai/RomMnite/issues/new). Problems with RomM itself belong in the [RomM repository](https://github.com/rommapp/romm/issues/new/choose).
+None. RomMnite is a personal project, released as-is and maintained as-is: there is no issue tracker, and bug reports and feature requests aren't taken. You're welcome to fork it and change it yourself under the license below. Problems with RomM itself belong in the [RomM repository](https://github.com/rommapp/romm/issues/new/choose).
 
 # License and acknowledgements
 
