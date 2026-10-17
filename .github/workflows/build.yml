@@ -42,8 +42,7 @@ jobs:
 
       - name: Pack
         run: |
-          mkdir .\PackingOutput
-          & "Playnite\Toolbox.exe" pack .\bin\Release\net462 .\PackingOutput
+          .\tools\pack.ps1 -Toolbox "Playnite\Toolbox.exe"
           Get-ChildItem .\PackingOutput
 
       - name: Upload artifact

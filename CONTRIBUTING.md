@@ -1,41 +1,15 @@
-# Contributing to RomM Playnite plugin
+# Contributing to RomMnite
 
-Thank you for considering contributing to RomM Playnite plugin! This document outlines some guidelines to help you get started with your contributions.
+Thanks for wanting to help with RomMnite.
 
-**If you're looking to implement a large feature or make significant changes to the project, it's best to open an issue first AND join the Discord to discuss your ideas with the maintainers.**
+## Reporting a problem or an idea
 
-## Code of Conduct
+[Open an issue](https://github.com/EmpyreaI/RomMnite/issues) with what you expected, what happened, and the steps to get there. Playnite's `extensions.log` (in Playnite's folder) usually shows what went wrong; include the lines around the problem. Problems with RomM itself belong in the [RomM repository](https://github.com/rommapp/romm/issues).
 
-Please note that this project adheres to the Contributor Covenant [code of conduct](CODE_OF_CONDUCT.md). By participating in this project, you are expected to uphold this code.
+## Changing the code
 
-## Contributing to the Docs
+For anything large, open an issue first so it can be talked through. Then fork the repository, make your change on a branch and open a pull request. [DEVELOPMENT.md](DEVELOPMENT.md) covers building and packing; `RomM.Tests` holds the unit tests (`dotnet test RomM.Tests`).
 
-If you would like to contribute to the project's [documentation](https://docs.romm.app/latest/Integrations/Playnite-plugin/), open a pull request against [the docs repo](https://github.com/rommapp/docs). We welcome any contributions that help improve the documentation (new pages, updates, or corrections).
+## License
 
-## How to Contribute Code
-
-**WIP**
-
-## Pull Request Guidelines
-
-- Make sure your code follows the project's coding standards.
-- Test your changes locally before opening a pull request.
-- Update the documentation if necessary.
-- Ensure all existing tests pass, and add new tests for new functionality.
-- Use clear and descriptive titles and descriptions for your pull requests.
-
-## Code Style
-
-**WIP**
-
-## Issue Reporting
-
-If you encounter any bugs or have suggestions for improvements, please [create an issue](https://github.com/rommapp/playnite-plugin/issues) on GitHub. Provide as much detail as possible, including steps to reproduce the issue if applicable.
-
-## Licensing
-
-By contributing to RomM Playnite plugin, you agree that your contributions will be licensed under the project's [LICENSE](LICENSE).
-
----
-
-Thank you for contributing to RomM Playnite plugin! Your help is greatly appreciated.
+By contributing, you agree that your contributions are licensed under the project's [LICENSE](LICENSE) (GPL-3.0).
