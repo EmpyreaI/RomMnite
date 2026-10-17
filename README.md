@@ -23,6 +23,16 @@ RomMnite turns [Playnite](https://playnite.link) into a Steam-like home for your
 - **In-game overlay**: the Home button opens play time, achievements and Resume / Quit over emulated games, and over Windows games running borderless or windowed.
 - **Accounts**: several RomM accounts on one PC, each with its own library, saves and achievements.
 
+# Screenshots
+
+The Store: a game's page, with its trailer, screenshots, reviews and details.
+
+![The RomMnite Store](.github/resources/store.png)
+
+The library: the same game once added, with its cloud save status and news.
+
+![The RomMnite library](.github/resources/library.png)
+
 # Requirements
 
 - Windows with Playnite 10 (Playnite SDK 6.18 or newer).
