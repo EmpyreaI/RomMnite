@@ -84,7 +84,7 @@
   <ItemGroup>
     <None Include="..\extension.yaml" Link="Declarations\extension.yaml" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\manifests\installer.yaml" Link="Declarations\installer.yaml" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="..\RomM.csproj" Link="Declarations\RomM.csproj.txt" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\RomMnite.csproj" Link="Declarations\RomMnite.csproj.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

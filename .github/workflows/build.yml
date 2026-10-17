@@ -2,7 +2,7 @@ name: Build and Release
 
 # Pushing a version tag (1.0.0, 1.0.1, ...) builds the extension, packs it with Playnite's
 # Toolbox and publishes a GitHub release with the .pext attached. The tag must match Version
-# in extension.yaml and RomM.csproj (the tests check those two agree).
+# in extension.yaml and RomMnite.csproj (the tests check those two agree).
 
 on:
   push:
@@ -29,11 +29,11 @@ jobs:
           dotnet-version: 9.0.x
 
       - name: Compiler toolset
-        run: dotnet add RomM.csproj package Microsoft.Net.Sdk.Compilers.Toolset --version 9.0.300
+        run: dotnet add RomMnite.csproj package Microsoft.Net.Sdk.Compilers.Toolset --version 9.0.300
 
-      # The same build as a local one (DEVELOPMENT.md).
+      # The same build as a local one (README.md, Building).
       - name: Build
-        run: msbuild RomM.csproj /restore /p:Configuration=Release /p:Platform="AnyCPU" /p:CopyLocalLockFileAssemblies=true
+        run: msbuild RomMnite.csproj /restore /p:Configuration=Release /p:Platform="AnyCPU" /p:CopyLocalLockFileAssemblies=true
 
       - name: Setup Playnite (for its Toolbox)
         run: |

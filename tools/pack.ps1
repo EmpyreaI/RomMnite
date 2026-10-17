@@ -1,7 +1,7 @@
 # Packs the built extension (bin\Release\net462) into a .pext with Playnite's Toolbox, then
 # removes from it the copies in lib\ of libraries that are also at its top.
 #
-# Every dependency is copied into lib\ as well (RomM.csproj, CopyDependenciesToLib), because the
+# Every dependency is copied into lib\ as well (RomMnite.csproj, CopyDependenciesToLib), because the
 # Toolbox leaves out of the top of a package the libraries Playnite ships itself, and the plugin
 # loads those from lib\ (PluginDependencies.cs). The ones the Toolbox keeps at the top are then
 # packed twice; only the top copy is ever loaded.

@@ -8,7 +8,7 @@ namespace RomM.Tests
 {
     /// <summary>
     /// The version this client reports to RomM comes from the assembly, which is built from Version
-    /// in RomM.csproj, while the addon manifests declare their own. Nothing in the compiler or the
+    /// in RomMnite.csproj, while the addon manifests declare their own. Nothing in the compiler or the
     /// packaging step ties the two together, so a release that bumped one and forgot the other would
     /// ship a plugin identifying itself as the wrong version, silently. These tests are that tie.
     /// </summary>
@@ -47,7 +47,7 @@ namespace RomM.Tests
         }
 
         private static string ProjectVersion() =>
-            Declaration("RomM.csproj.txt", @"<Version>\s*([^<\s]+)\s*</Version>");
+            Declaration("RomMnite.csproj.txt", @"<Version>\s*([^<\s]+)\s*</Version>");
 
         private static string ExtensionVersion() =>
             Declaration("extension.yaml", @"(?m)^﻿?Version:\s*(\S+)\s*$");

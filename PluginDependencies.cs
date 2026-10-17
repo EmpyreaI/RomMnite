@@ -11,7 +11,7 @@ namespace RomM
     /// own out of the top of the .pext (its ExtensionsRefIgnoreList.txt), so the extension
     /// would get Playnite's copies, of other versions, which .NET refuses ("Could not load file
     /// or assembly 'SharpCompress, Version=0.36.0.0'"). The build also puts every dependency in
-    /// lib\ (RomM.csproj, CopyDependenciesToLib), which the Toolbox keeps; when .NET cannot find
+    /// lib\ (RomMnite.csproj, CopyDependenciesToLib), which the Toolbox keeps; when .NET cannot find
     /// a library, it is loaded from there.
     /// </summary>
     internal static class PluginDependencies

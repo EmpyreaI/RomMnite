@@ -41,7 +41,7 @@ jobs:
 
       - name: Build with MSBuild
         run: |
-          msbuild RomM.csproj /p:Configuration=Release /p:Platform="AnyCPU" /p:RestorePackages=false
+          msbuild RomMnite.csproj /p:Configuration=Release /p:Platform="AnyCPU" /p:RestorePackages=false
 
   test:
     runs-on: windows-2025-vs2026

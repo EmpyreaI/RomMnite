@@ -36,4 +36,4 @@ jobs:
 
       - name: Build with MSBuild
         run: |
-          msbuild RomM.csproj /p:Configuration=Release /p:Platform="AnyCPU" /p:RestorePackages=false
+          msbuild RomMnite.csproj /p:Configuration=Release /p:Platform="AnyCPU" /p:RestorePackages=false

@@ -5,7 +5,7 @@ namespace RomM
     /// <summary>
     /// The plugin's own version, as reported to RomM whenever this client registers itself (QR
     /// pairing, save sync device registration). Read from the assembly -- built from Version in
-    /// RomM.csproj -- so the registration paths cannot report different versions from one another;
+    /// RomMnite.csproj -- so the registration paths cannot report different versions from one another;
     /// PluginVersionTests ties that version to the one the addon manifests declare.
     /// </summary>
     internal static class PluginVersion
