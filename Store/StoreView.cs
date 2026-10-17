@@ -839,9 +839,8 @@ namespace RomM.Store
         {
             bool show = _plugin.CloudStatus.StoreVisible;
             // Pictures asked for while it is out of sight wait behind the library's; once it
-            // shows, those still waiting may take every slot.
+            // shows, those still waiting are no longer background (ShowPicture).
             s_outOfSight = !show;
-            StoreImages.BackgroundLimit = show ? 6 : 2;
             Visibility = show ? Visibility.Visible : Visibility.Collapsed;
             if (!show)
             {
@@ -895,15 +894,28 @@ namespace RomM.Store
         private static volatile bool s_outOfSight = true;
         private static volatile bool s_prefetching;
 
-        private static void ShowPicture(Image target, string url, int decodeWidth, string keepIn = null, string fallback = null) =>
-            StoreImages.Show(target, url, decodeWidth, keepIn, fallback, background: s_outOfSight || s_prefetching);
+        // A prefetched page's pictures are background for good; the others while the Store is
+        // out of sight (asked again until they download, so opening the Store promotes them).
+        private static readonly Func<bool> WhileOutOfSight = () => s_outOfSight;
 
-        // Before a request to the server while the Store is out of sight: what the user is
-        // doing goes first (Foreground). Never on the UI thread, which must not wait.
+        private static void ShowPicture(Image target, string url, int decodeWidth, string keepIn = null, string fallback = null) =>
+            StoreImages.Show(target, url, decodeWidth, keepIn, fallback, s_prefetching ? StoreImages.Always : WhileOutOfSight);
+
+        // Work the user did not ask for (the genre and series counts, a prefetched page's art),
+        // for the code it runs, its parallel requests included: it waits for what they are
+        // doing, also while the Store shows.
+        private static readonly System.Threading.AsyncLocal<bool> s_background = new System.Threading.AsyncLocal<bool>();
+
+        // Before a request to the server: while the Store is out of sight, or for background work,
+        // what the user is doing goes first (Foreground: a Store page just opened, a game picked
+        // in the library, saves syncing...). Never on the UI thread, which must not wait.
         private void WaitForForeground()
         {
-            if (s_outOfSight && !Dispatcher.CheckAccess())
-                global::RomM.Foreground.WaitQuiet(() => s_outOfSight);
+            if ((s_outOfSight || s_background.Value) && !Dispatcher.CheckAccess())
+            {
+                bool background = s_background.Value;
+                global::RomM.Foreground.WaitQuiet(() => s_outOfSight || background);
+            }
         }
 
         // The UI work of a page put together out of sight: after input and drawing, so the
@@ -1221,6 +1233,9 @@ namespace RomM.Store
 
         private void RecordStore(Account.NavEntry entry, bool browsing)
         {
+            // A Store page opened: for a moment it goes before anything in the background.
+            if (_plugin.CloudStatus.StoreVisible)
+                global::RomM.Foreground.Touch(TimeSpan.FromSeconds(5));
             _storeCurrent = entry;
             if (browsing)
                 _browseEntry = entry;

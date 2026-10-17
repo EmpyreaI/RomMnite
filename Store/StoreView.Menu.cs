@@ -58,6 +58,8 @@ namespace RomM.Store
         /// </summary>
         private void CountCategories(List<string> genres, List<string> series)
         {
+            // Background work: each request waits for what the user is doing (WaitForForeground).
+            s_background.Value = true;
             try
             {
                 // First, while the Store's curtain is down: the pictures wait for it.
@@ -68,6 +70,7 @@ namespace RomM.Store
             }
             finally
             {
+                s_background.Value = false;
                 StoreImages.Release();
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
@@ -755,7 +758,7 @@ namespace RomM.Store
             {
                 MenuArt pick = ChooseArt(key, candidates);
                 if (pick != null)
-                    StoreImages.Show(image, Url(pick.Path), width, background: background || s_outOfSight);
+                    StoreImages.Show(image, Url(pick.Path), width, null, null, background ? StoreImages.Always : WhileOutOfSight);
             };
 
             if (_menuArt.TryGetValue(key, out List<MenuArt> known))
@@ -777,14 +780,15 @@ namespace RomM.Store
                 List<MenuArt> found;
                 if (background)
                 {
-                    global::RomM.Foreground.WaitQuiet();
                     s_prefetchQueries.Wait();
+                    s_background.Value = true;
                     try
                     {
                         found = ServerArt(query);
                     }
                     finally
                     {
+                        s_background.Value = false;
                         s_prefetchQueries.Release();
                     }
                 }

@@ -412,42 +412,52 @@ namespace RomM.Store
                 showcase.AddRange(take(recent, FeaturedCount - showcase.Count));
             bool fromFeed = played.Count > 0;
             _featured = showcase.Take(FeaturedCount).ToList();
-            if (_featured.Count > 0)
+            // The carousel's pictures (its game on show, the glimpses either side, the backdrop)
+            // are Home's first look: the loading curtain waits for them (StoreImages.Critical).
+            StoreImages.Critical = true;
+            try
             {
-                // The carousel runs the full width of the window, so its glimpses can reach past
-                // the page; its heading and everything after it keep to the page's width.
-                var head = new StackPanel { MaxWidth = ContentWidth, Margin = new Thickness(PageMargin, 8, PageMargin, 0) };
-                head.Children.Add(HomeTitle(fromFeed ? "Featured & Recommended" : "Featured", 0));
-
-                var outer = new StackPanel();
-                // Kept to its own height: in the same cell as the banner, a stretched block
-                // would grow with the banner, and the banner with it, without end.
-                var featuredBlock = new StackPanel { VerticalAlignment = VerticalAlignment.Top };
-                featuredBlock.Children.Add(head);
-                featuredBlock.Children.Add(BuildCarousel());
-                _featuredBlock = featuredBlock;
-
-                // Behind the heading and the carousel, the fan art of the game on show, as on
-                // the category pages: an oval banner that follows the carousel.
-                var featuredHost = new Grid();
-                Grid banner = BannerBackdrop(out Action<HomeItem> showBanner);
-                featuredHost.Children.Add(banner);
-                featuredHost.Children.Add(featuredBlock);
-                featuredBlock.SizeChanged += (s, e) =>
-                {
-                    if (e.HeightChanged && e.NewSize.Height > 0)
-                        banner.Height = Math.Round(e.NewSize.Height + 40);
-                };
-                _homeBanner = showBanner;
                 if (_featured.Count > 0)
-                    showBanner(_featured[((_featuredIndex % _featured.Count) + _featured.Count) % _featured.Count]);
-                outer.Children.Add(featuredHost);
-                _homeInset.Child = null;
-                outer.Children.Add(_homeBody);
-                _homeInset.Child = outer;
+                {
+                    // The carousel runs the full width of the window, so its glimpses can reach past
+                    // the page; its heading and everything after it keep to the page's width.
+                    var head = new StackPanel { MaxWidth = ContentWidth, Margin = new Thickness(PageMargin, 8, PageMargin, 0) };
+                    head.Children.Add(HomeTitle(fromFeed ? "Featured & Recommended" : "Featured", 0));
 
-                foreach (HomeItem item in _featured)
-                    _homeShown.Add(item.Rom.Id);
+                    var outer = new StackPanel();
+                    // Kept to its own height: in the same cell as the banner, a stretched block
+                    // would grow with the banner, and the banner with it, without end.
+                    var featuredBlock = new StackPanel { VerticalAlignment = VerticalAlignment.Top };
+                    featuredBlock.Children.Add(head);
+                    featuredBlock.Children.Add(BuildCarousel());
+                    _featuredBlock = featuredBlock;
+
+                    // Behind the heading and the carousel, the fan art of the game on show, as on
+                    // the category pages: an oval banner that follows the carousel.
+                    var featuredHost = new Grid();
+                    Grid banner = BannerBackdrop(out Action<HomeItem> showBanner);
+                    featuredHost.Children.Add(banner);
+                    featuredHost.Children.Add(featuredBlock);
+                    featuredBlock.SizeChanged += (s, e) =>
+                    {
+                        if (e.HeightChanged && e.NewSize.Height > 0)
+                            banner.Height = Math.Round(e.NewSize.Height + 40);
+                    };
+                    _homeBanner = showBanner;
+                    if (_featured.Count > 0)
+                        showBanner(_featured[((_featuredIndex % _featured.Count) + _featured.Count) % _featured.Count]);
+                    outer.Children.Add(featuredHost);
+                    _homeInset.Child = null;
+                    outer.Children.Add(_homeBody);
+                    _homeInset.Child = outer;
+
+                    foreach (HomeItem item in _featured)
+                        _homeShown.Add(item.Rom.Id);
+                }
+            }
+            finally
+            {
+                StoreImages.Critical = false;
             }
 
             // Everything recommended that the carousel did not take, in the feed's order.
@@ -962,6 +972,12 @@ namespace RomM.Store
                     // Only while it is actually on screen and left alone.
                     if (_carouselHeld || !IsVisible || !_home.IsVisible || _gamePage.IsVisible || _featured.Count < 2)
                         return;
+                    // Not onto a game whose picture is still on its way (PrefetchCarousel); a
+                    // picture that never comes holds it three turns at most.
+                    HomeItem next = _featured[(_featuredIndex + 1) % _featured.Count];
+                    if (!StoreImages.IsCached(Url(Wide(next)), 1280) && ++_carouselWaits <= 3)
+                        return;
+                    _carouselWaits = 0;
                     // Turning on its own leaves alone any card or video the pointer has open
                     // elsewhere on the page; those belong to other tiles, not the carousel.
                     Slide(1, false);
@@ -1157,6 +1173,34 @@ namespace RomM.Store
             peek.MouseEnter += (s, e) => peek.Opacity = 1;
             peek.MouseLeave += (s, e) => peek.Opacity = 0.8;
             return peek;
+        }
+
+        private int _carouselWaits;
+
+        /// <summary>
+        /// The carousel's other games' pictures fetched ahead, next first (its stage, screenshots,
+        /// glimpse, logos and backdrop at the sizes it shows them), in the background lane, so
+        /// it never turns onto a game still loading. Once Home's curtain has lifted.
+        /// </summary>
+        private void PrefetchCarousel()
+        {
+            if (_featured == null || _featured.Count < 2)
+                return;
+            for (int step = 1; step < _featured.Count; step++)
+            {
+                HomeItem item = _featured[(_featuredIndex + step) % _featured.Count];
+                string wide = Wide(item);
+                StoreImages.Prefetch(Url(wide), 1280);
+                StoreImages.Prefetch(Url(wide), 640);
+                string art = FanartPath(item.Rom) ?? wide;
+                if (art != null)
+                    StoreImages.Prefetch(Url(art), 1600);
+                foreach (string path in MediaPaths(item.Rom).Where(p => p != wide).Take(4))
+                    StoreImages.Prefetch(Url(path), 320);
+                string logo = RomMMetadataMapper.LogoUrl(Host, item.Rom, out bool _);
+                StoreImages.Prefetch(logo, 900);
+                StoreImages.Prefetch(logo, 500);
+            }
         }
 
         private void ShowPeek(HomeItem item, Image image, Grid logoHost)

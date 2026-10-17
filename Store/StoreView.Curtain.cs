@@ -9,10 +9,13 @@ namespace RomM.Store
 {
     /// <summary>
     /// The Store's loading curtain: while Home is first put together, a curtain over the Store
-    /// with a spinner and how far it has got, lifted once the page is there and at least half
-    /// of the pictures it asked for have arrived (or failed), so the Store is not seen as a
-    /// page of empty frames filling in. It lifts after twelve seconds whatever the count, and
-    /// at once when the server cannot be reached (the page says so).
+    /// with a spinner and how far it has got, lifted once the page is there, its first look is
+    /// complete (every picture of the carousel, and the anniversaries and game of the day laid
+    /// out with theirs: StoreImages.Critical) and at least half of all the pictures it asked
+    /// for have arrived (or failed), so the Store is not seen as a page of empty frames
+    /// filling in. It lifts after twelve seconds on screen whatever the count (time out of
+    /// sight, while the Store loads in the background, does not count), and at once when the
+    /// server cannot be reached (the page says so).
     ///
     /// Before the pictures, the genres and series are counted (StoreView.Menu: CountCategories),
     /// with the pictures held back meanwhile, so the bar's menus and the Genres and Series
@@ -33,6 +36,8 @@ namespace RomM.Store
         private DateTime _curtainSince;
         private DateTime? _curtainDataAt;   // when Home's data was laid out
         private bool _categoriesReady;       // the genres and series counted (or nothing to count)
+        private bool _liveTopReady;          // the anniversaries and game of the day laid out (StoreView.Live)
+        private DateTime? _curtainSeenSince; // when the curtain was first on screen (the Store showing)
 
         private void BuildCurtain(Grid root)
         {
@@ -75,6 +80,8 @@ namespace RomM.Store
             StoreImages.StartCounting();
             _curtainSince = DateTime.UtcNow;
             _curtainDataAt = null;
+            _liveTopReady = false;
+            _curtainSeenSince = null;
             _curtain.BeginAnimation(OpacityProperty, null);
             _curtain.Opacity = 1;
             _curtain.Visibility = Visibility.Visible;
@@ -102,6 +109,13 @@ namespace RomM.Store
             }
             int asked = StoreImages.Asked, settled = Math.Min(StoreImages.Settled, asked);
             double pictures = asked == 0 ? 0 : Math.Min(1, settled / (asked * CurtainPictures));
+            // The first look (the carousel, the anniversaries, the game of the day): every one
+            // of its pictures, and the top sections laid out.
+            int firstAsked = StoreImages.CriticalAsked, firstSettled = Math.Min(StoreImages.CriticalSettled, firstAsked);
+            double firstLook = firstAsked == 0 ? 1 : (double)firstSettled / firstAsked;
+            if (!_liveTopReady)
+                firstLook = Math.Min(firstLook, 0.9);
+            pictures = Math.Min(pictures, firstLook);
             double waited = (DateTime.UtcNow - _curtainSince).TotalSeconds;
             // The data and the counts: each creeping toward its quarter while it is asked for.
             double data = _curtainDataAt != null ? 1 : 1 - Math.Exp(-waited / 2);
@@ -111,11 +125,19 @@ namespace RomM.Store
             double progress = 0.25 * data + 0.25 * counts + 0.5 * (_categoriesReady ? pictures : 0);
             _curtainText.Text = !_categoriesReady ? "Sorting genres and series..."
                 : _curtainDataAt == null ? "Asking the server..."
+                : firstAsked > firstSettled ? $"Loading pictures... {firstSettled} of {firstAsked}"
+                : !_liveTopReady ? "Finding today's highlights..."
                 : asked > 0 ? $"Loading pictures... {settled} of {asked}" : "Almost there...";
             _curtainFill.Width = 260 * progress;
 
-            bool ready = _curtainDataAt != null && _categoriesReady && pictures >= 1;
-            if (ready || DateTime.UtcNow - _curtainSince > CurtainLongest)
+            bool ready = _curtainDataAt != null && _categoriesReady && _liveTopReady
+                         && firstSettled >= firstAsked && pictures >= 1;
+            // The longest wait counts only while someone can see it: loading out of sight
+            // (StoreView.Preload) never lifts the curtain on a half-loaded page.
+            if (IsVisible && _curtainSeenSince == null)
+                _curtainSeenSince = DateTime.UtcNow;
+            bool waitedLongest = _curtainSeenSince != null && DateTime.UtcNow - _curtainSeenSince.Value > CurtainLongest;
+            if (ready || waitedLongest)
                 LiftCurtain();
         }
 
@@ -131,7 +153,9 @@ namespace RomM.Store
                 _curtain.Visibility = Visibility.Collapsed;
                 _curtain.BeginAnimation(OpacityProperty, null);
                 _curtain.Opacity = 1;
-                // Home is up: the Platforms, Genres and Series pages' pictures next.
+                // Home is up: the carousel's other games next, then the Platforms, Genres and
+                // Series pages' pictures (which wait for the carousel's: no picture on its way).
+                PrefetchCarousel();
                 PrefetchDirectories();
             };
             _curtain.BeginAnimation(OpacityProperty, fade);

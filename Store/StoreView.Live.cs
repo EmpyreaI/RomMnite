@@ -379,10 +379,21 @@ namespace RomM.Store
             _liveSpotlight.Children.Clear();
             _liveSeries.Children.Clear();
 
-            if (birthdays.Count > 0)
-                _liveBirthday.Children.Add(BuildBirthday(birthdays, today));
-            if (data.Daily != null)
-                _liveDaily.Children.Add(BuildDaily(data.Daily));
+            // The anniversaries and the game of the day are at the top of Home: part of its
+            // first look, which the loading curtain waits for.
+            StoreImages.Critical = true;
+            try
+            {
+                if (birthdays.Count > 0)
+                    _liveBirthday.Children.Add(BuildBirthday(birthdays, today));
+                if (data.Daily != null)
+                    _liveDaily.Children.Add(BuildDaily(data.Daily));
+            }
+            finally
+            {
+                StoreImages.Critical = false;
+                _liveTopReady = true;
+            }
 
             if (week.Count > 0)
             {

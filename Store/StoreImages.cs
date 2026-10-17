@@ -31,7 +31,7 @@ namespace RomM.Store
         private static int s_backgroundLimit = 2;
         private static int s_backgroundRunning;
 
-        /// <summary>How many slots background pictures may use (2 out of sight, 6 while the Store shows).</summary>
+        /// <summary>How many of the six slots background pictures may use at most.</summary>
         public static int BackgroundLimit
         {
             get => Volatile.Read(ref s_backgroundLimit);
@@ -108,7 +108,7 @@ namespace RomM.Store
             if (KeptArt(url) != null)
                 return true;
             await s_gate.Task.ConfigureAwait(false);
-            await TakeSlot(true).ConfigureAwait(false);
+            await TakeSlot(Always).ConfigureAwait(false);
             try
             {
                 byte[] bytes = await Fetch(url, folder).ConfigureAwait(false);
@@ -126,24 +126,47 @@ namespace RomM.Store
             }
         }
 
-        // A download slot: in the background lane, only while the background's share is free.
-        private static async Task TakeSlot(bool background)
+        /// <summary>Always in the background (pictures nobody is looking at).</summary>
+        public static readonly Func<bool> Always = () => true;
+
+        // Pictures on screen waiting for a slot: the background takes none while there are any.
+        private static int s_foregroundWaiting;
+
+        /// <summary>
+        /// A download slot. What is on screen first: it queues for a slot as soon as it is asked
+        /// for. Background pictures (<paramref name="background"/> true, asked each time round,
+        /// so a picture of a page that has just been opened stops being background) only take a
+        /// slot that is free when nothing on screen is waiting, nothing the user is doing is under
+        /// way (Foreground), and fewer than <see cref="BackgroundLimit"/> are already downloading.
+        /// Whether the slot was taken as background (it counts toward the limit until released).
+        /// </summary>
+        private static async Task<bool> TakeSlot(Func<bool> background)
         {
-            // Background pictures wait while the user is doing something (Foreground).
-            // (Not once the Store shows: then its pictures are what the user is looking at.)
-            if (background)
-                await Foreground.WaitQuietAsync(() => BackgroundLimit < 6).ConfigureAwait(false);
             while (true)
             {
-                await s_slots.WaitAsync().ConfigureAwait(false);
-                if (!background)
-                    return;
-                if (Interlocked.Increment(ref s_backgroundRunning) <= BackgroundLimit)
-                    return;
-                // The background's share is in use: the slot goes back to what is on screen.
-                Interlocked.Decrement(ref s_backgroundRunning);
-                s_slots.Release();
-                await Task.Delay(150).ConfigureAwait(false);
+                if (background == null || !background())
+                {
+                    Interlocked.Increment(ref s_foregroundWaiting);
+                    try
+                    {
+                        await s_slots.WaitAsync().ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        Interlocked.Decrement(ref s_foregroundWaiting);
+                    }
+                    return false;
+                }
+                if (Volatile.Read(ref s_foregroundWaiting) == 0 && Foreground.Quiet
+                    && Volatile.Read(ref s_backgroundRunning) < BackgroundLimit
+                    && await s_slots.WaitAsync(0).ConfigureAwait(false))
+                {
+                    if (Interlocked.Increment(ref s_backgroundRunning) <= BackgroundLimit)
+                        return true;
+                    Interlocked.Decrement(ref s_backgroundRunning);
+                    s_slots.Release();
+                }
+                await Task.Delay(200).ConfigureAwait(false);
             }
         }
 
@@ -163,6 +186,40 @@ namespace RomM.Store
         {
             Interlocked.Exchange(ref s_asked, 0);
             Interlocked.Exchange(ref s_settled, 0);
+            Interlocked.Exchange(ref s_criticalAsked, 0);
+            Interlocked.Exchange(ref s_criticalSettled, 0);
+        }
+
+        // ---- The first look ---------------------------------------------------------------------
+
+        private static int s_criticalAsked;
+        private static int s_criticalSettled;
+
+        /// <summary>
+        /// On while a page's first look is put together (on the UI thread: the Store's carousel
+        /// and the sections at the top of Home): the pictures asked for meanwhile are its first
+        /// look. They are never background, and the loading curtain waits for every one of them
+        /// (<see cref="CriticalAsked"/>, <see cref="CriticalSettled"/>).
+        /// </summary>
+        public static bool Critical { get; set; }
+
+        public static int CriticalAsked => Volatile.Read(ref s_criticalAsked);
+        public static int CriticalSettled => Volatile.Read(ref s_criticalSettled);
+
+        /// <summary>Whether the picture is ready to show at once (in memory at that size).</summary>
+        public static bool IsCached(string url, int decodeWidth)
+        {
+            if (string.IsNullOrEmpty(url))
+                return false;
+            lock (s_lock)
+                return s_cache.ContainsKey(decodeWidth + "|" + url);
+        }
+
+        /// <summary>A picture fetched into memory at that size, shown nowhere yet, in the background lane.</summary>
+        public static void Prefetch(string url, int decodeWidth)
+        {
+            if (!string.IsNullOrEmpty(url) && !IsCached(url, decodeWidth))
+                Show(new Image(), url, decodeWidth, null, null, Always);
         }
 
         // Pictures wait while this is open (the Store's genres and series being counted first).
@@ -196,8 +253,16 @@ namespace RomM.Store
         /// </param>
         /// <param name="fallback">Another address for the same picture, tried when <paramref name="url"/> fails.</param>
         /// <param name="background">Fetched in the background lane (<see cref="BackgroundLimit"/>).</param>
-        public static void Show(Image target, string url, int decodeWidth, string keepIn = null, string fallback = null, bool background = false)
+        public static void Show(Image target, string url, int decodeWidth, string keepIn = null, string fallback = null, bool background = false) =>
+            Show(target, url, decodeWidth, keepIn, fallback, background ? Always : null);
+
+        /// <param name="backgroundWhile">Fetched in the background lane while this says so (asked
+        /// until the download starts: the Store's pictures stop being background once it shows).</param>
+        public static void Show(Image target, string url, int decodeWidth, string keepIn, string fallback, Func<bool> backgroundWhile)
         {
+            // Part of a first look: never background, and counted for the curtain.
+            bool critical = Critical;
+            Func<bool> background = critical ? null : backgroundWhile;
             if (target == null)
                 return;
             if (string.IsNullOrEmpty(url))
@@ -229,6 +294,8 @@ namespace RomM.Store
             if (target.Source == null)
                 Spinner.Attach(target);
             Interlocked.Increment(ref s_asked);
+            if (critical)
+                Interlocked.Increment(ref s_criticalAsked);
 
             Task.Run(async () =>
             {
@@ -242,6 +309,8 @@ namespace RomM.Store
                 finally
                 {
                     Interlocked.Increment(ref s_settled);
+                    if (critical)
+                        Interlocked.Increment(ref s_criticalSettled);
                 }
                 if (image == null)
                 {
@@ -349,7 +418,7 @@ namespace RomM.Store
             return bitmap;
         }
 
-        private static async Task<ImageSource> Load(string url, int decodeWidth, string keepIn, bool background)
+        private static async Task<ImageSource> Load(string url, int decodeWidth, string keepIn, Func<bool> background)
         {
             // A library game's artwork already on disk: read from there, no slot needed.
             if (keepIn == null)
@@ -370,7 +439,7 @@ namespace RomM.Store
                     keepIn = ArtFolder;   // one of the library's: kept once downloaded
             }
             await s_gate.Task.ConfigureAwait(false);
-            await TakeSlot(background).ConfigureAwait(false);
+            bool inBackground = await TakeSlot(background).ConfigureAwait(false);
             try
             {
                 for (int attempt = 1; attempt <= 2; attempt++)
@@ -392,7 +461,7 @@ namespace RomM.Store
             }
             finally
             {
-                if (background)
+                if (inBackground)
                     Interlocked.Decrement(ref s_backgroundRunning);
                 s_slots.Release();
             }
