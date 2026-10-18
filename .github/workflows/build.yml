@@ -1,8 +1,10 @@
 name: Build and Release
 
 # Pushing a version tag (1.0.0, 1.0.1, ...) builds the extension, packs it with Playnite's
-# Toolbox and publishes a GitHub release with the .pext attached. The tag must match Version
-# in extension.yaml and RomMnite.csproj (the tests check those two agree).
+# Toolbox and publishes a GitHub release with the .pext attached. The tag is the version: it is
+# written into extension.yaml and RomMnite.csproj before the build (Stamp the version), so the
+# release's .pext, the DLL and what the plugin reports to RomM all carry it, whatever those two
+# files say in the repository.
 
 on:
   push:
@@ -31,6 +33,18 @@ jobs:
       - name: Compiler toolset
         run: dotnet add RomMnite.csproj package Microsoft.Net.Sdk.Compilers.Toolset --version 9.0.300
 
+      # The tag's version (its numbers: "1.2.0-beta" gives 1.2.0) in both places the version
+      # lives. A manual run (no tag) keeps what the files say.
+      - name: Stamp the version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}" -replace '[^0-9.].*$', ''
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "The tag ${{ github.ref_name }} is not a version (1.2.3)." }
+          (Get-Content extension.yaml -Raw) -replace '(?m)^Version:.*$', "Version: $version" | Set-Content extension.yaml -NoNewline -Encoding utf8
+          (Get-Content RomMnite.csproj -Raw) -replace '<Version>[^<]*</Version>', "<Version>$version</Version>" | Set-Content RomMnite.csproj -NoNewline -Encoding utf8
+          Write-Host "Building version $version"
+
       # The same build as a local one (README.md, Building).
       - name: Build
         run: msbuild RomMnite.csproj /restore /p:Configuration=Release /p:Platform="AnyCPU" /p:CopyLocalLockFileAssemblies=true
@@ -58,3 +72,60 @@ jobs:
           name: RomMnite ${{ github.ref_name }}
           body_path: CHANGELOG.md
           files: PackingOutput/*.pext
+
+      # Playnite's add-on browser offers an update only when manifests/installer.yaml lists the
+      # version: the release added to it on main, with its .pext's address and the changelog's
+      # points. Not for a pre-release tag (1.2.0-beta), which would be offered to everyone.
+      - name: Check out main (for the add-on manifest)
+        if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-')
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: main-branch
+
+      - name: Add the release to installer.yaml
+        if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-')
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '[^0-9.].*$', ''
+          $file = 'main-branch/manifests/installer.yaml'
+          $text = [IO.File]::ReadAllText($file)
+          if ($text -match "(?m)^\s*-\s*Version:\s*$([regex]::Escape($version))\s*$") {
+            Write-Host "installer.yaml already lists $version."
+            exit 0
+          }
+
+          $pext = (Get-ChildItem PackingOutput -Filter *.pext | Select-Object -First 1).Name
+          $url = "${{ github.server_url }}/${{ github.repository }}/releases/download/$tag/$pext"
+          $api = ([xml](Get-Content RomMnite.csproj -Raw)).Project.ItemGroup.PackageReference |
+            Where-Object { $_.Include -eq 'PlayniteSDK' } | Select-Object -First 1 -ExpandProperty Version
+          if (-not $api) { $api = '6.18.0' }
+
+          # The changelog's points ("- ..." lines), plain text, single-quoted for YAML.
+          $points = Get-Content CHANGELOG.md | Where-Object { $_ -match '^\s*[-*]\s+\S' } | Select-Object -First 12 |
+            ForEach-Object { ($_ -replace '^\s*[-*]\s+', '' -replace '\*\*|`', '').Trim() }
+          if (-not $points) { $points = @("See the release notes: ${{ github.server_url }}/${{ github.repository }}/releases/tag/$tag") }
+
+          $nl = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
+          $entry = @(
+            "  - Version: $version",
+            "    RequiredApiVersion: $api",
+            "    ReleaseDate: $((Get-Date).ToUniversalTime().ToString('yyyy-MM-dd'))",
+            "    PackageUrl: $url",
+            "    Changelog:"
+          ) + ($points | ForEach-Object { "      - '" + ($_ -replace "'", "''") + "'" })
+
+          # Newest first, under "Packages:".
+          $at = [regex]::Match($text, "(?m)^Packages:[ \t]*\r?\n")
+          if (-not $at.Success) { throw "installer.yaml has no Packages: line." }
+          $text = $text.Insert($at.Index + $at.Length, ($entry -join $nl) + $nl)
+          [IO.File]::WriteAllText($file, $text, (New-Object Text.UTF8Encoding $false))
+
+          Set-Location main-branch
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add manifests/installer.yaml
+          git commit -m "installer.yaml: $version"
+          git push origin HEAD:main
