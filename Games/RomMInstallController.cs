@@ -67,7 +67,9 @@ namespace RomM.Games
 
             bool windows = global::RomM.Setup.EmulatorSetup.IsWindowsPlatform(_gameData.Mapping?.RomMPlatform);
 
-            var req = new DownloadRequest
+            // Declared first: the install callback below reads it (its download size).
+            DownloadRequest req = null;
+            req = new DownloadRequest
             {
                 GameId = Game.Id,
                 GameName = Game.Name,
@@ -144,6 +146,28 @@ namespace RomM.Games
                     _romM.Playnite.Database.Games.Update(game);
 
                     InvokeOnInstalled(installedArgs);
+
+                    // A Windows game's size: what was downloaded. Playnite measures an installed
+                    // game with ROMs by its ROM files alone (GamesEditor.CalculateGameSize, run as
+                    // InvokeOnInstalled returns), which for a Windows game is its program file. Set
+                    // after that, with Playnite's scan date left as it is, so its library scans keep
+                    // it (they measure again only when that file changes).
+                    if (windows && req.DownloadedSize > 0)
+                    {
+                        try
+                        {
+                            var installed = _romM.Playnite.Database.Games[Game.Id];
+                            if (installed != null && installed.InstallSize != (ulong)req.DownloadedSize)
+                            {
+                                installed.InstallSize = (ulong)req.DownloadedSize;
+                                _romM.Playnite.Database.Games.Update(installed);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _romM.Logger.Warn($"[Downloads] Could not set {Game.Name}'s install size: {ex.Message}");
+                        }
+                    }
                 },
 
                 OnCanceled = () =>

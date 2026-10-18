@@ -375,6 +375,10 @@ namespace RomM.Downloads
                     break;
             }
 
+            // The whole download's size, as "Downloading data" shows it: the server's own length
+            // for the file, else what reached the disk.
+            req.DownloadedSize = totalBytes.HasValue && totalBytes.Value > 0 ? totalBytes.Value : downloaded;
+
             // Extract if needed (we treat extract as 0..100 in its own bar)
             // Don't extract archives when install flat is enabled
             if (req.DownloadAsArchive || (req.AutoExtract && IsFileCompressed(req.GamePath) && !req.InstallFlat))

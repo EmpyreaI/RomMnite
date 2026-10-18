@@ -74,6 +74,20 @@ namespace RomM.Account
             Changed?.Invoke();
         }
 
+        /// <summary>
+        /// Forgets every place, back and forward (signing out: the next account must not be
+        /// able to go back into the last one's pages).
+        /// </summary>
+        public void Clear()
+        {
+            _back.Clear();
+            _forward.Clear();
+            _current = null;
+            _restoring = null;
+            _restoreUntil = DateTime.MinValue;
+            Changed?.Invoke();
+        }
+
         public void Back()
         {
             if (_back.Count == 0)

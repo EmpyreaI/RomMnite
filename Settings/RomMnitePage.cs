@@ -67,16 +67,22 @@ namespace RomM.Settings
             page.Children.Add(Note("Shift+Tab opens it from the keyboard whichever you choose."));
             page.Children.Add(Check("Show it over Windows games too (they keep running while it's open; Steam games keep Steam's own overlay)", nameof(SettingsViewModel.OverlayForPcGames)));
             page.Children.Add(Check("Open emulators' own menus with Start + Select (DuckStation, PCSX2, RetroArch, PPSSPP), so the Home button is the overlay's alone", nameof(SettingsViewModel.EmulatorMenusOnStartSelect)));
-            page.Children.Add(Note("Applied as each game starts, and only where you haven't put the emulator's menu on a controller button yourself. Not with Back + Start above, which shares those buttons. Windows' Xbox Game Bar also opens on the Home button unless it's turned off in Windows' Game Bar settings."));
+            page.Children.Add(Note("Applied as each game starts, and only where you haven't put the emulator's menu on a controller button yourself. Not while the overlay is on Back + Start, which shares those buttons."));
             page.Children.Add(Check("Render emulated games at your display's resolution (DuckStation, PCSX2, RPCS3, Dolphin, Azahar, Xenia, Vita3K, Flycast, xemu)", nameof(SettingsViewModel.EmulatorsAtDisplayResolution)));
             page.Children.Add(Note("Applied as each game starts, only where the emulator's resolution is still its default: a resolution you choose in the emulator stays. Sharper, but heavier on the graphics card; lower it in the emulator if a game slows down. Turning this off puts back the emulators' defaults."));
-            var guideWarning = Note("Playnite's own \"Guide button\" setting is on (Settings, Input), so Playnite takes the Home button and the overlay leaves it alone. Turn that off for the Home button to open the overlay.");
+            var guideWarning = Note("");
             guideWarning.Foreground = new SolidColorBrush(Color.FromRgb(0xE5, 0xB1, 0x43));
             guideWarning.Opacity = 1;
             Action showGuideWarning = () =>
             {
-                bool takes = (button.SelectedValue as string) == "Guide" && global::RomM.Overlay.GameOverlay.PlayniteTakesGuide(_plugin.Playnite);
-                guideWarning.Visibility = takes ? Visibility.Visible : Visibility.Collapsed;
+                string by = (button.SelectedValue as string) == "Guide" ? global::RomM.Overlay.GameOverlay.GuideTakenBy(_plugin.Playnite) : null;
+                guideWarning.Visibility = by != null ? Visibility.Visible : Visibility.Collapsed;
+                if (by == null)
+                    return;
+                string fix = by == "Playnite" ? "Turn off Playnite's own \"Guide button\" setting (Settings, Input)"
+                    : by == "Steam" ? "Close Steam"
+                    : "Turn off \"Open Xbox Game Bar using this button on a controller\" in Windows' Game Bar settings";
+                guideWarning.Text = $"{by} has the Home button right now, so games use Hold Start + Select for the overlay instead (emulators' menus are taken off it then). {fix} for the Home button to open the overlay.";
             };
             button.SelectionChanged += (s, e) => showGuideWarning();
             Loaded += (s, e) => showGuideWarning();

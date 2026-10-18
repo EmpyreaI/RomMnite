@@ -38,9 +38,9 @@ namespace RomM.Overlay
     ///
     /// Either way, the game's own exit is then seen by Playnite as usual (play time, cloud saves).
     ///
-    /// Controllers are read through XInput only (Xbox pads, and others in XInput mode), which
-    /// reads them without taking them from the emulator: SDL's DirectInput path would open them
-    /// exclusively. Other controllers open it with the keyboard. Windows' Xbox Game Bar also
+    /// Controllers are read without taking them from the game: Xbox pads (and others in XInput
+    /// mode) through XInput, Switch, PlayStation and other DirectInput pads through their HID
+    /// input, shared (HidPads). SDL's DirectInput path would open them exclusively. Windows' Xbox Game Bar also
     /// opens on the Guide button unless that is turned off in Windows' Game Bar settings.
     ///
     /// Playnite can take the Guide button too ("Guide button switches to Fullscreen mode", in its
@@ -64,12 +64,17 @@ namespace RomM.Overlay
         private LowLevelKeyboardProc _hookProc;   // kept alive while hooked
         private volatile bool _guideOpens = true;  // false while Playnite takes the Guide button
         private volatile string _button = "Guide";  // OverlayButton: Guide, BackStart, L3R3, None
+        private string _guideTakenBy;                // what has the Home button instead (Steam...), or null
         private bool _isPc;
         private static readonly Guid SteamLibrary = Guid.Parse("CB91DFC9-B977-43BF-8E70-55F46E410FAB");
+
+        // The running game's own volume and mute (the overlay's Game volume).
+        private readonly GameAudio _audio;
 
         public GameOverlay(RomM plugin)
         {
             _plugin = plugin;
+            _audio = new GameAudio(plugin.GetPluginUserDataPath());
             InputActivity.Start();
         }
 
@@ -90,10 +95,12 @@ namespace RomM.Overlay
             _isPc = pc;
             _processId = processId;
             _startedUtc = DateTime.UtcNow;
-            _button = _plugin.Settings?.OverlayButton ?? "Guide";
-            _guideOpens = _button == "Guide" && !PlayniteTakesGuide();
-            if (_button == "Guide" && !_guideOpens)
-                s_log.Info("[Overlay] Playnite's own Guide button setting is on, so the Home button is left to it; the overlay opens with Shift+Tab.");
+            string chosen = _plugin.Settings?.OverlayButton ?? "Guide";
+            _guideTakenBy = chosen == "Guide" ? GuideTakenBy(_plugin.Playnite) : null;
+            _button = _guideTakenBy != null ? "BackStart" : chosen;
+            _guideOpens = _button == "Guide";
+            if (_guideTakenBy != null)
+                s_log.Info($"[Overlay] {_guideTakenBy} takes the Home button, so the overlay opens with Start + Select (held) instead.");
             _processFolder = null;
             if (pc && !string.IsNullOrEmpty(game.InstallDirectory))
             {
@@ -121,6 +128,10 @@ namespace RomM.Overlay
             }
 
             _running = true;
+            // Switch, PlayStation and other controllers XInput does not see (HidPads).
+            HidPads.Begin();
+            // Its volume as last set for it (else full), on its sound as it starts.
+            _audio.Start(game.Id, IsGameProcess);
             _poller = new Thread(Poll) { IsBackground = true, Name = "RomM overlay" };
             _poller.Start();
             HookKeyboard();
@@ -140,14 +151,72 @@ namespace RomM.Overlay
                     ShowFullscreenNote();
                     return;
                 }
-                // Only the buttons of what is in use: the controller's, or the keyboard's.
-                bool pad = InputActivity.ControllerInUse && PadOpens() != null;
-                Toast.Show("Overlay ready",
-                    pad ? PadOpens() + " to open the overlay." : "Press Shift+Tab to open the overlay.",
+                // With a controller connected (any kind), its way first: the game was most likely
+                // started with the mouse, so the last input says little about what will be used.
+                string padOpens = PadOpens();
+                bool pad = padOpens != null && (InputActivity.ControllerInUse || ControllerConnected());
+                string message = pad ? $"{padOpens} to open the overlay, or Shift+Tab." : "Press Shift+Tab to open the overlay.";
+                if (pad && _guideTakenBy != null)
+                    message += $" ({_guideTakenBy} has the Home button.)";
+                Toast.Show("Overlay ready", message,
                     glyph: "\uE7FC",
                     screenOf: GameInFront() ? GetForegroundWindow() : IntPtr.Zero);
             };
             hint.Start();
+        }
+
+        /// <summary>
+        /// What else answers the Home (Guide) button, so the overlay would open along with it:
+        /// Playnite's own Guide setting, Steam (running: its Guide button opens Steam), or the
+        /// Xbox Game Bar (installed, and its "Open Xbox Game Bar using this button on a
+        /// controller" on: HKCU\Software\Microsoft\GameBar, UseNexusForGameBarEnabled, on unless
+        /// set to 0). Null when nothing does. Then the overlay opens with Start + Select instead.
+        /// </summary>
+        internal static string GuideTakenBy(IPlayniteAPI api)
+        {
+            if (PlayniteTakesGuide(api))
+                return "Playnite";
+            try
+            {
+                Process[] steam = Process.GetProcessesByName("steam");
+                foreach (Process p in steam)
+                    p.Dispose();
+                if (steam.Length > 0)
+                    return "Steam";
+            }
+            catch
+            {
+            }
+            if (GameBarTakesGuide())
+                return "The Xbox Game Bar";
+            return null;
+        }
+
+        /// <summary>The button that opens the overlay: the setting's, or Start + Select when the Home button is taken.</summary>
+        internal static string EffectiveButton(string chosen, IPlayniteAPI api) =>
+            (chosen ?? "Guide") == "Guide" && GuideTakenBy(api) != null ? "BackStart" : (chosen ?? "Guide");
+
+        private static bool GameBarTakesGuide()
+        {
+            try
+            {
+                // Installed (its app package registered for this user).
+                using (var packages = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+                    @"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages"))
+                {
+                    if (packages != null && !packages.GetSubKeyNames().Any(n => n.StartsWith("Microsoft.XboxGamingOverlay", StringComparison.OrdinalIgnoreCase)))
+                        return false;
+                }
+                using (var gameBar = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\GameBar"))
+                {
+                    object value = gameBar?.GetValue("UseNexusForGameBarEnabled");
+                    return !(value is int on) || on != 0;
+                }
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         /// <summary>
@@ -190,6 +259,8 @@ namespace RomM.Overlay
         public void Stop()
         {
             _running = false;
+            HidPads.End();
+            _audio.Stop();
             UnhookKeyboard();
             CloseWindow();
             Resume();
@@ -205,9 +276,22 @@ namespace RomM.Overlay
             switch (_button)
             {
                 case "Guide": return _guideOpens ? "Press the Home button" : null;
-                case "BackStart": return "Hold Back + Start";
+                case "BackStart": return "Hold Start + Select";
                 case "L3R3": return "Press both sticks in (L3 + R3)";
                 default: return null;
+            }
+        }
+
+        // A controller connected: an Xbox pad (XInput), or one read directly (HidPads).
+        private static bool ControllerConnected()
+        {
+            try
+            {
+                return ControllerMonitor.XInputConnected() || HidPads.Count > 0;
+            }
+            catch
+            {
+                return false;
             }
         }
 
@@ -249,7 +333,7 @@ namespace RomM.Overlay
                 }
                 if (!_isPc)
                     Suspend();
-                _window = new OverlayWindow(_plugin, game, _startedUtc, Bounds(gameWindow), keepsRunning: _isPc);
+                _window = new OverlayWindow(_plugin, game, _startedUtc, Bounds(gameWindow), keepsRunning: _isPc, audio: _audio);
                 _window.ResumeRequested += CloseWindow;
                 _window.QuitRequested += Quit;
                 _window.Closed += (s, e) =>
@@ -318,76 +402,99 @@ namespace RomM.Overlay
         // still there five seconds later.
         private int _frontProcessId;   // the process whose window was the game's when the overlay opened
 
+        // How long a game has to close when asked before it is ended: an emulator saves its
+        // settings at once; a Windows game may be writing its save as it exits.
+        private static readonly TimeSpan EmulatorGrace = TimeSpan.FromSeconds(5);
+        private static readonly TimeSpan PcGrace = TimeSpan.FromSeconds(10);
+
+        /// <summary>The game's process Exit closes: a Windows game's window in front, else the one started.</summary>
+        internal int QuitProcessId => _isPc && _frontProcessId > 0 ? _frontProcessId : _processId;
+
+        /// <summary>The game the overlay is over, if any.</summary>
+        internal Guid? GameId => _game?.Id;
+
+        /// <summary>How long a game has to close before it is ended: emulators 5 s, Windows games 10 s.</summary>
+        internal static TimeSpan GraceFor(Game game) => game != null && IsPc(game) ? PcGrace : EmulatorGrace;
+
         private void Quit()
         {
-            int pid = _processId;
+            int pid = QuitProcessId;
+            string name = _game?.Name;
+            TimeSpan grace = _isPc ? PcGrace : EmulatorGrace;
             CloseWindow();
             Resume();
-            if (_isPc)
-            {
-                QuitPc(_frontProcessId > 0 ? _frontProcessId : pid, _game?.Name);
-                return;
-            }
-            if (pid <= 0)
-                return;
-            System.Threading.Tasks.Task.Run(() =>
-            {
-                try
-                {
-                    using (Process process = Process.GetProcessById(pid))
-                    {
-                        // The window in front is the game's (the emulator's, or a child's).
-                        process.CloseMainWindow();
-                        if (!process.WaitForExit(5000))
-                        {
-                            s_log.Info($"[Overlay] {process.ProcessName} did not close; ending it.");
-                            process.Kill();
-                        }
-                    }
-                }
-                catch (ArgumentException)
-                {
-                    // Gone already.
-                }
-                catch (Exception ex)
-                {
-                    s_log.Warn($"[Overlay] Could not quit the game: {ex.Message}");
-                }
-            });
-        }
-
-        // A Windows game: asked to close, never ended by force (it may be saving).
-        private void QuitPc(int pid, string name)
-        {
             if (pid <= 0)
             {
                 Toast.Show("Can't quit from here", $"Quit {name ?? "the game"} from its own menu.", glyph: "\uE7BA");
                 return;
             }
-            System.Threading.Tasks.Task.Run(() =>
-            {
-                try
-                {
-                    using (Process process = Process.GetProcessById(pid))
-                    {
-                        process.CloseMainWindow();
-                        if (!process.WaitForExit(10000))
-                        {
-                            s_log.Info($"[Overlay] {process.ProcessName} did not close when asked; left running.");
-                            Ui(() => Toast.Show("Still running", $"{name ?? "The game"} didn't close when asked. Quit from its own menu.", glyph: "\uE7BA"));
-                        }
-                    }
-                }
-                catch (ArgumentException)
-                {
-                    // Gone already.
-                }
-                catch (Exception ex)
-                {
-                    s_log.Warn($"[Overlay] Could not quit the game: {ex.Message}");
-                }
-            });
+            CloseGame(pid, name, grace);
         }
+
+        /// <summary>
+        /// Asks the game to close as its own close button would (so it saves), with a pop-up
+        /// counting down the seconds it has; ended if it is still there when they are up.
+        /// </summary>
+        private static void CloseGame(int pid, string name, TimeSpan grace) =>
+            System.Threading.Tasks.Task.Run(() => CloseGameAndWait(pid, name, grace));
+
+        /// <summary>
+        /// <see cref="CloseGame"/>, returning once the game is gone (or could not be closed):
+        /// true when it is gone. <paramref name="status"/> hears the countdown too.
+        /// </summary>
+        internal static bool CloseGameAndWait(int pid, string name, TimeSpan grace, Action<string> status = null)
+        {
+            Toast.Live note = null;
+            try
+            {
+                using (Process process = Process.GetProcessById(pid))
+                {
+                    IntPtr window = IntPtr.Zero;
+                    try
+                    {
+                        window = process.MainWindowHandle;
+                    }
+                    catch
+                    {
+                    }
+                    string title = $"Closing {name ?? "the game"}...";
+                    note = Toast.ShowLive(title, Countdown((int)grace.TotalSeconds), glyph: "\uE711", screenOf: window);
+                    status?.Invoke(Countdown((int)grace.TotalSeconds));
+                    process.CloseMainWindow();
+                    DateTime until = DateTime.UtcNow + grace;
+                    while (!process.WaitForExit(250))
+                    {
+                        int left = (int)Math.Ceiling((until - DateTime.UtcNow).TotalSeconds);
+                        if (left <= 0)
+                        {
+                            s_log.Info($"[Overlay] {process.ProcessName} did not close within {grace.TotalSeconds:0} s; ending it.");
+                            process.Kill();
+                            note.Close();
+                            return process.WaitForExit(3000);
+                        }
+                        note.Update(Countdown(left));
+                        status?.Invoke(Countdown(left));
+                    }
+                    note.Close();
+                    return true;
+                }
+            }
+            catch (ArgumentException)
+            {
+                note?.Close();   // gone already
+                return true;
+            }
+            catch (Exception ex)
+            {
+                s_log.Warn($"[Overlay] Could not quit the game: {ex.Message}");
+                note?.Update("Couldn't close it. Quit from its own menu.");
+                note?.Close(TimeSpan.FromSeconds(4));
+                return false;
+            }
+        }
+
+        private static string Countdown(int seconds) =>
+            $"Force quitting in {seconds} second{(seconds == 1 ? "" : "s")} if it doesn't close.";
 
         // ---- Pausing ---------------------------------------------------------------------------
 
@@ -459,14 +566,14 @@ namespace RomM.Overlay
         private void Poll()
         {
             bool haveEx = true;
-            var previous = new ushort[4];
+            var previous = new ushort[5];
             DateTime comboSince = DateTime.MaxValue;
             bool comboFired = false;
             while (_running)
             {
                 try
                 {
-                    ushort all = 0;
+                    ushort all = 0, pressedAll = 0;
                     for (uint i = 0; i < 4; i++)
                     {
                         XInputState state;
@@ -488,12 +595,21 @@ namespace RomM.Overlay
                             result = XInputGetState(i, out state);
                         }
                         ushort now = result == 0 ? state.Buttons : (ushort)0;
-                        ushort pressed = (ushort)(now & ~previous[i]);
+                        pressedAll |= (ushort)(now & ~previous[i]);
                         previous[i] = now;
                         all |= now;
-                        if (pressed != 0)
-                            OnPressed(pressed);
                     }
+                    // The controllers XInput does not see, as one more.
+                    ushort hid = HidPads.Buttons;
+                    if (hid != previous[4] && hid != 0)
+                        InputActivity.NotePad();
+                    pressedAll |= (ushort)(hid & ~previous[4]);
+                    previous[4] = hid;
+                    all |= hid;
+                    // One press, once: a controller seen both ways (Steam Input's virtual pad
+                    // and the controller itself) is still one.
+                    if (pressedAll != 0)
+                        OnPressed(pressedAll);
 
                     // The chosen pair held together for half a second.
                     ushort pair = _button == "BackStart" ? (ushort)(PadBack | PadStart)
@@ -528,10 +644,17 @@ namespace RomM.Overlay
             }
         }
 
+        private DateTime _lastGuideToggle = DateTime.MinValue;
+
         private void OnPressed(ushort pressed)
         {
             if ((pressed & PadGuide) != 0 && _guideOpens)
             {
+                // The same press reaching here twice (one controller read two ways, a moment
+                // apart) opens it once.
+                if (DateTime.UtcNow - _lastGuideToggle < TimeSpan.FromMilliseconds(300))
+                    return;
+                _lastGuideToggle = DateTime.UtcNow;
                 Ui(Toggle);
                 return;
             }
@@ -540,8 +663,9 @@ namespace RomM.Overlay
             // In the overlay: the D-pad moves between its buttons, A presses, B closes.
             if ((pressed & DPadUp) != 0) Ui(() => _window?.Move(-1));
             if ((pressed & DPadDown) != 0) Ui(() => _window?.Move(1));
-            if ((pressed & DPadLeft) != 0) Ui(() => _window?.Move(-1));
-            if ((pressed & DPadRight) != 0) Ui(() => _window?.Move(1));
+            // Left and right turn the game's volume when it is chosen, else move like up and down.
+            if ((pressed & DPadLeft) != 0) Ui(() => { if (_window != null && !_window.Adjust(-1)) _window.Move(-1); });
+            if ((pressed & DPadRight) != 0) Ui(() => { if (_window != null && !_window.Adjust(1)) _window.Move(1); });
             if ((pressed & PadA) != 0) Ui(() => _window?.Press());
             if ((pressed & PadB) != 0) Ui(CloseWindow);
         }
@@ -677,21 +801,26 @@ namespace RomM.Overlay
             if (front == IntPtr.Zero)
                 return false;
             GetWindowThreadProcessId(front, out uint pid);
-            if (_processId > 0 && pid == (uint)_processId)
+            return IsGameProcess((int)pid);
+        }
+
+        // Whether a process is the game's: Playnite's process for it, or a program from its folder.
+        private bool IsGameProcess(int pid)
+        {
+            if (_processId > 0 && pid == _processId)
                 return true;
-            if (string.IsNullOrEmpty(_processFolder) || pid == (uint)Process.GetCurrentProcess().Id)
+            string gameFolder = _processFolder;
+            if (string.IsNullOrEmpty(gameFolder) || pid <= 0 || pid == Process.GetCurrentProcess().Id)
                 return false;
             try
             {
-                {
-                    string path = ProcessPath((int)pid);
-                    if (string.IsNullOrEmpty(path))
-                        return false;
-                    string folder = Path.GetDirectoryName(path) ?? "";
-                    string root = _processFolder.TrimEnd('\\', '/');
-                    return string.Equals(folder, root, StringComparison.OrdinalIgnoreCase)
-                           || folder.StartsWith(root + "\\", StringComparison.OrdinalIgnoreCase);
-                }
+                string path = ProcessPath(pid);
+                if (string.IsNullOrEmpty(path))
+                    return false;
+                string folder = Path.GetDirectoryName(path) ?? "";
+                string root = gameFolder.TrimEnd('\\', '/');
+                return string.Equals(folder, root, StringComparison.OrdinalIgnoreCase)
+                       || folder.StartsWith(root + "\\", StringComparison.OrdinalIgnoreCase);
             }
             catch
             {

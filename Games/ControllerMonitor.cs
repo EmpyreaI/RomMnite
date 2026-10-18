@@ -15,18 +15,33 @@ namespace RomM.Games
         public string Name { get; set; }
         /// <summary>SDL knows its layout (a "game controller"), so an emulator set to SDL maps it as an Xbox pad.</summary>
         public bool Known { get; set; }
-        /// <summary>An XInput device (an Xbox controller, or one acting as one): what Xenia reads.</summary>
+        /// <summary>An XInput device (an Xbox controller, or one acting as one).</summary>
         public bool XInput { get; set; }
+        /// <summary>Its USB vendor and product ids (0 when SDL does not know them).</summary>
+        public int VendorId { get; set; }
+        public int ProductId { get; set; }
+        /// <summary>SDL's mapping for it ("guid,name,a:b1,guide:b12,..."), when SDL knows its layout; for reading it directly (Overlay.HidPads).</summary>
+        public string Mapping { get; set; }
         /// <summary>SDL's controller type: 4 PS4, 7 PS5, 5 Switch Pro... (0 unknown).</summary>
         public int Type { get; set; }
+        /// <summary>
+        /// Not known to SDL by itself, but in the community's controller list
+        /// (<see cref="ControllerDatabase"/>), which the SDL emulators Playnite starts are given:
+        /// mapped as an Xbox pad in those, not necessarily in the others.
+        /// </summary>
+        public bool InDatabase { get; set; }
+
+        /// <summary>Mapped as an Xbox pad in the SDL emulators started from Playnite.</summary>
+        public bool KnownToSdl => Known || InDatabase;
 
         public bool IsPs4 => Type == 4;
         public bool IsPs5 => Type == 7;
 
         public override bool Equals(object obj) =>
-            obj is ConnectedPad other && other.Name == Name && other.Known == Known && other.XInput == XInput && other.Type == Type;
+            obj is ConnectedPad other && other.Name == Name && other.Known == Known && other.XInput == XInput && other.Type == Type
+            && other.InDatabase == InDatabase && other.VendorId == VendorId && other.ProductId == ProductId;
 
-        public override int GetHashCode() => (Name ?? "").GetHashCode() ^ (Known ? 1 : 0) ^ (XInput ? 2 : 0);
+        public override int GetHashCode() => (Name ?? "").GetHashCode() ^ (Known ? 1 : 0) ^ (XInput ? 2 : 0) ^ (InDatabase ? 4 : 0);
     }
 
     /// <summary>
@@ -34,7 +49,7 @@ namespace RomM.Games
     /// library's Controller section. Asked of SDL2 (shipped with the plugin, Native\SDL2), the
     /// same library almost every emulator here reads controllers through: a controller SDL
     /// recognises as a "game controller" gets an Xbox-style layout in them all. XInput devices
-    /// are counted apart (Xenia reads only those).
+    /// are counted apart (Dolphin, Cemu and RPCS3 are bound to them by their XInput slot).
     ///
     /// Only looked at, never opened, so nothing changes for the emulators: SDL's HIDAPI and raw
     /// input drivers are turned off here (HIDAPI opens some controllers and talks to them as
@@ -43,6 +58,10 @@ namespace RomM.Games
     /// thread; this asks every second and a half while anything listens, and raises Changed
     /// when the answer differs. Without SDL (the file missing, or it fails to load) only XInput
     /// controllers are seen.
+    ///
+    /// A controller SDL does not know by itself is looked up in the community's controller list
+    /// (ControllerDatabase), which this SDL is not given (so the two stay told apart) but the
+    /// emulators are.
     /// </summary>
     public static class ControllerMonitor
     {
@@ -84,6 +103,28 @@ namespace RomM.Games
             {
                 return false;
             }
+        }
+
+        /// <summary>
+        /// The XInput slot (0-3) of the first Xbox controller connected, or -1: Dolphin, Cemu and
+        /// RPCS3 name an XInput device by its slot, which is not always the first (a controller
+        /// reconnected, or a second one in before it).
+        /// </summary>
+        public static int FirstXInputSlot()
+        {
+            for (int slot = 0; slot < 4; slot++)
+            {
+                try
+                {
+                    if (XInputConnected(slot))
+                        return slot;
+                }
+                catch
+                {
+                    return -1;
+                }
+            }
+            return -1;
         }
 
         /// <summary>The controllers seen last (on any thread).</summary>
@@ -169,7 +210,27 @@ namespace RomM.Games
                     // SDL_CONTROLLER_TYPE_XBOX360 / XBOXONE: what SDL's XInput driver calls the
                     // pads it reads (third-party pads in XInput mode included).
                     int type = known ? SDL_GameControllerTypeForIndex(i) : 0;
-                    pads.Add(new ConnectedPad { Name = name, Known = known, XInput = type == 1 || type == 2, Type = type });
+                    // Unknown to SDL by itself: perhaps in the community's list, under its name there.
+                    bool listed = false;
+                    string listedMapping = null;
+                    if (!known)
+                    {
+                        string guid = GuidOf(i);
+                        listedMapping = ControllerDatabase.MappingFor(guid);
+                        string listedName = ControllerDatabase.NameFor(guid);
+                        if (listedName != null)
+                        {
+                            listed = true;
+                            name = listedName;
+                        }
+                    }
+                    pads.Add(new ConnectedPad
+                    {
+                        Name = name, Known = known, XInput = type == 1 || type == 2, Type = type, InDatabase = listed,
+                        VendorId = SDL_JoystickGetDeviceVendor(i), ProductId = SDL_JoystickGetDeviceProduct(i),
+                        // SDL's own mapping, else the community list's line for it.
+                        Mapping = known ? Utf8Owned(SDL_GameControllerMappingForDeviceIndex(i)) : listedMapping,
+                    });
                 }
             }
             else
@@ -190,6 +251,11 @@ namespace RomM.Games
 
         [DllImport("SDL2.dll", CallingConvention = CallingConvention.Cdecl)]
         private static extern int SDL_SetHint([MarshalAs(UnmanagedType.LPStr)] string name, [MarshalAs(UnmanagedType.LPStr)] string value);
+
+        [DllImport("SDL2.dll", CallingConvention = CallingConvention.Cdecl)]
+        private static extern int SDL_SetHintWithPriority([MarshalAs(UnmanagedType.LPStr)] string name, [MarshalAs(UnmanagedType.LPStr)] string value, int priority);
+
+        private const int SDL_HINT_OVERRIDE = 2;
 
         [DllImport("SDL2.dll", CallingConvention = CallingConvention.Cdecl)]
         private static extern int SDL_Init(uint flags);
@@ -215,6 +281,63 @@ namespace RomM.Games
         [DllImport("SDL2.dll", CallingConvention = CallingConvention.Cdecl)]
         private static extern IntPtr SDL_GetError();
 
+        [DllImport("SDL2.dll", CallingConvention = CallingConvention.Cdecl)]
+        private static extern IntPtr SDL_GameControllerMappingForDeviceIndex(int index);
+
+        [DllImport("SDL2.dll", CallingConvention = CallingConvention.Cdecl)]
+        private static extern void SDL_free(IntPtr memory);
+
+        // A string SDL hands over to be freed (SDL_GameControllerMappingForDeviceIndex).
+        private static string Utf8Owned(IntPtr text)
+        {
+            if (text == IntPtr.Zero)
+                return null;
+            try
+            {
+                return Utf8(text);
+            }
+            finally
+            {
+                SDL_free(text);
+            }
+        }
+
+        [DllImport("SDL2.dll", CallingConvention = CallingConvention.Cdecl)]
+        private static extern ushort SDL_JoystickGetDeviceVendor(int index);
+
+        [DllImport("SDL2.dll", CallingConvention = CallingConvention.Cdecl)]
+        private static extern ushort SDL_JoystickGetDeviceProduct(int index);
+
+        // SDL_JoystickGUID: 16 bytes, returned by value.
+        [StructLayout(LayoutKind.Sequential)]
+        private struct SdlGuid
+        {
+            public ulong Low;
+            public ulong High;
+        }
+
+        [DllImport("SDL2.dll", CallingConvention = CallingConvention.Cdecl)]
+        private static extern SdlGuid SDL_JoystickGetDeviceGUID(int index);
+
+        // A device's GUID as the controller list writes it: its 16 bytes in order, as hex.
+        private static string GuidOf(int index)
+        {
+            try
+            {
+                SdlGuid guid = SDL_JoystickGetDeviceGUID(index);
+                var text = new StringBuilder(32);
+                foreach (byte b in BitConverter.GetBytes(guid.Low))
+                    text.Append(b.ToString("x2"));
+                foreach (byte b in BitConverter.GetBytes(guid.High))
+                    text.Append(b.ToString("x2"));
+                return text.ToString();
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         private static bool TryStartSdl()
         {
             try
@@ -230,6 +353,10 @@ namespace RomM.Games
                 SDL_SetHint("SDL_JOYSTICK_HIDAPI", "0");
                 SDL_SetHint("SDL_JOYSTICK_RAWINPUT", "0");
                 SDL_SetHint("SDL_JOYSTICK_THREAD", "1");
+                // Not the community's controller list, which Playnite's environment names for the
+                // emulators (ControllerDatabase): SDL's own knowledge is told apart from the
+                // list's. Only an override comes before the environment.
+                SDL_SetHintWithPriority("SDL_GAMECONTROLLERCONFIG_FILE", "", SDL_HINT_OVERRIDE);
                 if (SDL_Init(SDL_INIT_GAMECONTROLLER) != 0)
                 {
                     s_log.Info($"[Controllers] SDL could not start: {Utf8(SDL_GetError())}; only XInput controllers are seen.");
@@ -278,6 +405,20 @@ namespace RomM.Games
         private static extern uint XInputGetState910(uint index, out XInputState state);
 
         private static bool s_xinput14 = true;
+
+        // Whether an XInput slot has a controller.
+        private static bool XInputConnected(int slot)
+        {
+            try
+            {
+                return (s_xinput14 ? XInputGetState14((uint)slot, out XInputState _) : XInputGetState910((uint)slot, out XInputState _)) == 0;
+            }
+            catch (DllNotFoundException) when (s_xinput14)
+            {
+                s_xinput14 = false;   // Windows 7: the older XInput
+                return XInputGetState910((uint)slot, out XInputState _) == 0;
+            }
+        }
 
         // How many of the four XInput slots have a controller (0 when XInput is missing).
         private static int XInputCount()

@@ -34,7 +34,9 @@ namespace RomM.Setup
     ///
     ///   DuckStation / PCSX2  first-run wizard done for them (DuckStationFirstRun, Pcsx2FirstRun),
     ///              controller 1 on SDL (any controller SDL knows)
-    ///   Dolphin, Cemu, RPCS3  controller 1 on the connected controller (EmulatorControllers)
+    ///              and controller 2 on the second gamepad when two are connected
+    ///   Dolphin, Cemu, RPCS3, Azahar, Eden  controller 1 on the connected controller
+    ///              (EmulatorControllers; the SDL ones as SDL3 sees them: ControllerProbe)
     ///   Azahar, Cemu, xemu, Vita3K  first-run screens and prompts (EmulatorFirstRun)
     ///   PCSX2      inis\PCSX2.ini [UI] ConfirmShutdown = false
     ///   DuckStation settings.ini [Main] ConfirmPowerOff = false
@@ -145,23 +147,27 @@ namespace RomM.Setup
         /// <summary>The emulator's own settings, just before a game starts in it.</summary>
         /// <param name="menusOnStartSelect">Emulators' own menus moved to Start + Select (EmulatorMenus).</param>
         /// <param name="overlayHasHome">Whether the overlay opens on the Home button.</param>
+        /// <param name="overlayOnStartSelect">Whether the overlay opens on Start + Select: the emulators' menus are taken off it.</param>
         /// <param name="upscale">Rendering at the display's resolution (EmulatorUpscale); off puts back what it set.</param>
         /// <param name="upscaleRecord">Where EmulatorUpscale notes what it set.</param>
         internal static void PrepareSettings(Emulator emulator, string installDir, bool menusOnStartSelect = false, bool overlayHasHome = false,
-            bool upscale = true, string upscaleRecord = null)
+            bool overlayOnStartSelect = false, bool upscale = true, string upscaleRecord = null)
         {
             if (emulator == null || string.IsNullOrEmpty(installDir))
                 return;
             string id = ((emulator.BuiltInConfigId ?? "") + " " + (emulator.Name ?? "")).ToLowerInvariant();
             try
             {
-                if (menusOnStartSelect)
+                if (overlayOnStartSelect)
+                    EmulatorMenus.Release(id, installDir);
+                else if (menusOnStartSelect)
                     EmulatorMenus.Apply(id, installDir, overlayHasHome);
 
                 if (id.Contains("pcsx2"))
                 {
                     // Its first-run wizard done for it (BIOS, XInput controller), if not yet.
                     Pcsx2FirstRun.Prepare(installDir);
+                    Pcsx2FirstRun.SecondPlayer(installDir, EmulatorControllers.SdlGamepads());
                     string ini = Existing(Path.Combine(installDir, "inis", "PCSX2.ini"),
                         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "PCSX2", "inis", "PCSX2.ini"));
                     Set("PCSX2", ini, SettingsFile.SetIni(ini, "UI", new Dictionary<string, string> { ["ConfirmShutdown"] = "false" }));
@@ -170,6 +176,7 @@ namespace RomM.Setup
                 {
                     // Its first-run wizard done for it (controller 1 on the gamepad), if not yet.
                     DuckStationFirstRun.Prepare(installDir);
+                    DuckStationFirstRun.SecondPlayer(installDir, EmulatorControllers.SdlGamepads());
                     string ini = Existing(Path.Combine(DuckStationFirstRun.DataRoot(installDir), "settings.ini"));
                     Set("DuckStation", ini, SettingsFile.SetIni(ini, "Main", new Dictionary<string, string> { ["ConfirmPowerOff"] = "false" }));
                 }
@@ -195,7 +202,10 @@ namespace RomM.Setup
                     EmulatorControllers.Dolphin(installDir);
                 }
                 else if (id.Contains("azahar"))
+                {
                     EmulatorFirstRun.Azahar(installDir);
+                    EmulatorControllers.Azahar(installDir);
+                }
                 else if (id.Contains("cemu"))
                 {
                     EmulatorFirstRun.Cemu(installDir);
@@ -203,6 +213,8 @@ namespace RomM.Setup
                 }
                 else if (id.Contains("xemu"))
                     EmulatorFirstRun.Xemu(installDir);
+                else if (id.Contains("eden"))
+                    EmulatorControllers.Eden(installDir);
                 else if (id.Contains("vita3k"))
                     EmulatorFirstRun.Vita3K(installDir);
                 else if (id.Contains("flycast"))

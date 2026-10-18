@@ -38,14 +38,20 @@ namespace RomM.Overlay
         private readonly StackPanel _achievements = new StackPanel();
         private TextBlock _achievementSummary;
         private readonly bool _keepsRunning;
+        private readonly GameAudio _audio;
+        private Button _volumeButton;
+        private TextBlock _volumeText;
+        private Border _volumeFill;
+        private ColumnDefinition _volumeOn, _volumeOff;
 
         public event Action ResumeRequested;
         public event Action QuitRequested;
 
         /// <param name="keepsRunning">A Windows game, not paused while this is open.</param>
-        public OverlayWindow(RomM plugin, Game game, DateTime startedUtc, Int32Rect screen, bool keepsRunning = false)
+        public OverlayWindow(RomM plugin, Game game, DateTime startedUtc, Int32Rect screen, bool keepsRunning = false, GameAudio audio = null)
         {
             _keepsRunning = keepsRunning;
+            _audio = audio;
             _plugin = plugin;
             _game = game;
             _startedUtc = startedUtc;
@@ -71,8 +77,9 @@ namespace RomM.Overlay
             {
                 WindowState = WindowState.Maximized;
                 Fill();
+                // Resume first; the game's volume is just above it.
                 if (_buttons.Count > 0)
-                    _buttons[0].Focus();
+                    (_buttons.FirstOrDefault(b => b != _volumeButton) ?? _buttons[0]).Focus();
             };
             KeyDown += (s, e) =>
             {
@@ -157,10 +164,14 @@ namespace RomM.Overlay
             body.Children.Add(Card(achievementsPanel, new Thickness(0)));
 
             var actions = new StackPanel { VerticalAlignment = VerticalAlignment.Bottom };
+            if (_audio != null)
+                actions.Children.Add(VolumeRow());
             actions.Children.Add(ActionButton("Resume", Blue, () => ResumeRequested?.Invoke()));
             actions.Children.Add(ActionButton("Quit game", Red, () => QuitRequested?.Invoke()));
             // Only the buttons of what is in use.
             string how = InputActivity.ControllerInUse ? "D-pad to choose, A to press, B to close." : "Arrow keys or the mouse to choose, Enter to press, Esc to close.";
+            if (_audio != null)
+                how += InputActivity.ControllerInUse ? " Left and right change the game's volume." : " Left and right arrows change the game's volume.";
             if (_keepsRunning)
                 how += InputActivity.ControllerInUse
                     ? " The game keeps running and may see these buttons too."
@@ -195,6 +206,115 @@ namespace RomM.Overlay
             button.Click += (s, e) => action();
             _buttons.Add(button);
             return button;
+        }
+
+        // ---- The game's volume ----------------------------------------------------------------
+
+        // "Game volume" with its level as a bar and in words: chosen like the other buttons; left
+        // and right turn it down and up by a tenth, pressing it mutes and unmutes. Only the game
+        // (its own sound, as Windows' volume mixer has it), nothing else on the PC.
+        private UIElement VolumeRow()
+        {
+            var title = Words("Game volume", 14, FontWeights.SemiBold, Brushes.White);
+            _volumeText = Words("", 14, FontWeights.Normal, Muted);
+            _volumeText.HorizontalAlignment = HorizontalAlignment.Right;
+            var heading = new Grid();
+            heading.Children.Add(title);
+            heading.Children.Add(_volumeText);
+
+            _volumeOn = new ColumnDefinition();
+            _volumeOff = new ColumnDefinition();
+            var bar = new Grid { Height = 6, Margin = new Thickness(0, 8, 0, 0) };
+            bar.ColumnDefinitions.Add(_volumeOn);
+            bar.ColumnDefinitions.Add(_volumeOff);
+            _volumeFill = new Border { Background = Blue, CornerRadius = new CornerRadius(3) };
+            var track = new Border { Background = Edge, CornerRadius = new CornerRadius(3) };
+            Grid.SetColumnSpan(track, 2);
+            bar.Children.Add(track);
+            bar.Children.Add(_volumeFill);
+
+            var panel = new StackPanel();
+            panel.Children.Add(heading);
+            panel.Children.Add(bar);
+            var face = new Border { Background = PanelBrush, CornerRadius = new CornerRadius(4), Padding = new Thickness(16, 12, 16, 14), Child = panel };
+            var ring = new Border { BorderThickness = new Thickness(3), CornerRadius = new CornerRadius(6), BorderBrush = Brushes.Transparent, Child = face };
+            var button = new Button
+            {
+                Content = ring,
+                Margin = new Thickness(0, 0, 0, 10),
+                Cursor = Cursors.Hand,
+                Template = BareTemplate(),
+                FocusVisualStyle = null,
+                ToolTip = "Left and right: volume. Press: mute.",
+            };
+            button.GotKeyboardFocus += (s, e) => ring.BorderBrush = Brushes.White;
+            button.LostKeyboardFocus += (s, e) => ring.BorderBrush = Brushes.Transparent;
+            button.MouseEnter += (s, e) => button.Focus();
+            button.Click += (s, e) => ToggleMute();
+            button.MouseWheel += (s, e) =>
+            {
+                e.Handled = true;
+                Step(e.Delta > 0 ? 1 : -1);
+            };
+            button.PreviewKeyDown += (s, e) =>
+            {
+                if (e.Key == Key.Left || e.Key == Key.Right)
+                {
+                    e.Handled = true;
+                    Step(e.Key == Key.Right ? 1 : -1);
+                }
+            };
+            _volumeButton = button;
+            _buttons.Add(button);
+            ShowVolume();
+            return button;
+        }
+
+        /// <summary>
+        /// The controller's left or right: the game's volume down or up a tenth when it is the
+        /// chosen button (and true), else nothing (false).
+        /// </summary>
+        public bool Adjust(int step)
+        {
+            if (_volumeButton == null || !_volumeButton.IsKeyboardFocused)
+                return false;
+            Step(step);
+            return true;
+        }
+
+        private void Step(int step)
+        {
+            if (_audio == null)
+                return;
+            // To the nearest tenth, so steps land on 0%, 10%, ... 100%.
+            double level = Math.Round(_audio.Volume * 10) / 10.0 + step * 0.1;
+            level = Math.Max(0, Math.Min(1, level));
+            _audio.SetVolume((float)level);
+            // Turning it up from muted unmutes it.
+            if (step > 0 && _audio.Muted)
+                _audio.SetMuted(false);
+            ShowVolume();
+        }
+
+        private void ToggleMute()
+        {
+            if (_audio == null)
+                return;
+            _audio.SetMuted(!_audio.Muted);
+            ShowVolume();
+        }
+
+        private void ShowVolume()
+        {
+            if (_audio == null || _volumeText == null)
+                return;
+            float level = _audio.Volume;
+            bool muted = _audio.Muted;
+            _volumeText.Text = muted ? "Muted" : $"{Math.Round(level * 100)}%";
+            double shown = muted ? 0 : level;
+            _volumeOn.Width = new GridLength(Math.Max(0.0001, shown), GridUnitType.Star);
+            _volumeOff.Width = new GridLength(Math.Max(0.0001, 1 - shown), GridUnitType.Star);
+            _volumeFill.Visibility = shown > 0 ? Visibility.Visible : Visibility.Collapsed;
         }
 
         // A button that draws only its content.

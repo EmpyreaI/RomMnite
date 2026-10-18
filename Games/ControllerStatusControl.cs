@@ -1,6 +1,7 @@
 using Playnite.SDK.Controls;
 using Playnite.SDK.Models;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -214,7 +215,7 @@ namespace RomM.Games
         public override void GameContextChanged(Game oldContext, Game newContext)
         {
             _game = newContext;
-            _emulated = Emulated(newContext);
+            _emulated = Emulated(newContext, out _emulatorId);
             _pcInfo = null;
             _pcAsked = false;
             Paint();
@@ -223,21 +224,43 @@ namespace RomM.Games
         // Whether the game is one an emulator here plays: a RomM game whose RomM platform an
         // emulator can be set up for. Asked once per game (it reads the platform's setup).
         private bool _emulated;
+        // The emulator that plays it ("duckstation", "retroarch"...), when known.
+        private string _emulatorId;
 
-        private bool Emulated(Game game)
+        private bool Emulated(Game game, out string emulatorId)
         {
+            emulatorId = null;
             try
             {
                 if (game == null || game.PluginId != _plugin.Id)
                     return false;
                 int platformId = _plugin.PlatformIdOf(game);
-                return platformId > 0 && _plugin.EmulatorSetup?.PlanFor(platformId) != null;
+                if (platformId <= 0)
+                    return false;
+                var plan = _plugin.EmulatorSetup?.PlanFor(platformId);
+                emulatorId = plan?.Definition?.Id;
+                return plan != null;
             }
             catch
             {
                 return false;
             }
         }
+
+        /// <summary>
+        /// The emulators here that read controllers through SDL's game controller support, so
+        /// also know the controllers in the community's list (ControllerDatabase, handed to them
+        /// through the environment). Xenia Canary is one: its default input ("any") skips XInput
+        /// for SDL (xenia_main.cc). PPSSPP (XInput and DirectInput on Windows) and RetroArch (its
+        /// own controller profiles) are not counted: for them a controller only SDL's list knows
+        /// is not said to work.
+        /// </summary>
+        private static readonly HashSet<string> SdlEmulators = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "duckstation", "pcsx2", "flycast", "xemu", "vita3k", "azahar", "cemu", "eden", "xenia",
+        };
+
+        private bool UsesSdl => _emulatorId != null && SdlEmulators.Contains(_emulatorId);
 
         // A Windows (PC) game. Not "PC Engine", "PC-FX" or "PC-98", which are emulated.
         private static bool IsPc(Game game) =>
@@ -282,15 +305,17 @@ namespace RomM.Games
             bool hasBest = better != null && pads.Any(better.Has);
             ShowBetter(better != null && !hasBest ? better : null);
 
-            Func<ConnectedPad, bool> ready = Ready(spec);
+            bool sdl = UsesSdl;
+            Func<ConnectedPad, bool> ready = Ready(spec, sdl);
             ConnectedPad good = pads.FirstOrDefault(ready);
-            ConnectedPad known = pads.FirstOrDefault(p => p.Known);
+            ConnectedPad known = pads.FirstOrDefault(p => sdl ? p.KnownToSdl : p.Known);
             if (good != null)
             {
                 _icon.Foreground = Good;
                 bool best = better == null || hasBest;
                 _headline.Text = best ? $"Your {Friendly(good.Name)} works with this game" : $"Your {Friendly(good.Name)} probably works with this game";
-                _detail.Text = "";
+                // Known from the community's list, not SDL's own: said, as that is less certain.
+                _detail.Text = good.Known ? "" : "Its button layout comes from the community controller list (SDL_GameControllerDB).";
             }
             else if (known != null)
             {
@@ -327,7 +352,7 @@ namespace RomM.Games
             }
 
             var pads = ControllerMonitor.Current;
-            ConnectedPad pad = pads.FirstOrDefault(p => p.Known) ?? pads.FirstOrDefault();
+            ConnectedPad pad = pads.FirstOrDefault(p => p.KnownToSdl) ?? pads.FirstOrDefault();
             string yours = pad != null ? $"Your {Friendly(pad.Name)}" : null;
             PadSupport support = _pcInfo?.Support ?? PadSupport.Unknown;
             // A game reading Xbox controllers only sees a PlayStation or Switch one as nothing.
@@ -502,27 +527,33 @@ namespace RomM.Games
         }
 
         /// <summary>
-        /// Which controllers a platform's emulator takes with no setting up: any SDL knows for
-        /// those that read controllers through SDL (set so here, or by default); an Xbox pad
-        /// for Dolphin's GameCube and Cemu, which are given one (EmulatorControllers), and also
-        /// PlayStation 4 and 5 controllers for RPCS3; none for Azahar, Eden and Dolphin's Wii
-        /// (Wii Remotes), which have to be shown the controller once.
+        /// Which controllers a platform's emulator takes with no setting up, as EmulatorControllers
+        /// binds them: any SDL knows for those that read controllers through SDL (set so here, or
+        /// by default) and for Azahar ("all controllers"). Dolphin (GameCube, and Wii as a Wii
+        /// Remote with a Nunchuk), Cemu, RPCS3 and Eden are given an Xbox pad by its slot, and any
+        /// other controller SDL knows as their SDL3 sees it (ControllerProbe) once SDL3 is here;
+        /// before that, Dolphin the controllers whose name SDL sets itself and RPCS3 PlayStation 4
+        /// and 5 controllers, and Eden none.
         /// </summary>
-        private static Func<ConnectedPad, bool> Ready(string spec)
+        private static Func<ConnectedPad, bool> Ready(string spec, bool sdl)
         {
+            bool probe = global::RomM.Setup.ControllerProbe.Available;
             switch (spec)
             {
                 case "nintendo_gamecube":
-                case "nintendo_wiiu":
-                    return p => p.XInput;
-                case "sony_playstation3":
-                    return p => p.XInput || p.IsPs4 || p.IsPs5;
-                case "nintendo_3ds":
-                case "nintendo_switch":
                 case "nintendo_wii":
-                    return p => false;
+                    return p => p.XInput || global::RomM.Setup.EmulatorControllers.DolphinSdlName(p) != null || (probe && p.KnownToSdl);
+                case "nintendo_wiiu":
+                    return p => p.XInput || (probe && p.KnownToSdl);
+                case "sony_playstation3":
+                    return p => p.XInput || p.IsPs4 || p.IsPs5 || (probe && p.KnownToSdl);
+                case "nintendo_3ds":
+                    return p => p.KnownToSdl;
+                case "nintendo_switch":
+                    return p => probe && p.KnownToSdl;
                 default:
-                    return p => p.Known;
+                    // An SDL emulator also knows the controllers in the community's list.
+                    return sdl ? (Func<ConnectedPad, bool>)(p => p.KnownToSdl) : p => p.Known;
             }
         }
 

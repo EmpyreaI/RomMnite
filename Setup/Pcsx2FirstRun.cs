@@ -246,6 +246,40 @@ namespace RomM.Setup
             return length == 10 ? "" : Encoding.ASCII.GetString(data, at, length);
         }
 
+        /// <summary>
+        /// Controller 2 on the second gamepad SDL knows (SDL-1), when two are connected and
+        /// [Pad2] is still "None" with nothing bound, as PCSX2 starts (Pad::GetDefaultPadType).
+        /// </summary>
+        internal static void SecondPlayer(string installDir, int gamepads)
+        {
+            if (gamepads < 2 || string.IsNullOrEmpty(installDir))
+                return;
+            try
+            {
+                bool portable = File.Exists(Path.Combine(installDir, "portable.txt")) || File.Exists(Path.Combine(installDir, "portable.ini"));
+                string dataRoot = portable ? installDir : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "PCSX2");
+                string ini = Path.Combine(dataRoot, "inis", "PCSX2.ini");
+                if (!File.Exists(ini))
+                    return;
+                string type = Value(ini, "Pad2", "Type");
+                if (type != null && !string.Equals(type, "None", StringComparison.OrdinalIgnoreCase))
+                    return;
+                bool sdl3 = File.Exists(Path.Combine(installDir, "SDL3.dll"));
+                Dictionary<string, string> bindings = PadBindings(sdl3);
+                if (bindings.Keys.Any(key => !string.IsNullOrEmpty(Value(ini, "Pad2", key))))
+                    return;   // something bound there: the user's
+                var values = new Dictionary<string, string> { ["Type"] = "DualShock2" };
+                foreach (KeyValuePair<string, string> binding in bindings)
+                    values[binding.Key] = binding.Value.Replace("SDL-0/", "SDL-1/");
+                if (SettingsFile.SetIni(ini, "Pad2", values, create: false))
+                    s_log.Info($"[EmulatorSetup] PCSX2: controller 2 on the second gamepad ({ini}).");
+            }
+            catch (Exception ex)
+            {
+                s_log.Warn($"[EmulatorSetup] PCSX2: could not set controller 2: {ex.Message}");
+            }
+        }
+
         // A value from an ini file ("key = value" under [section]), or null.
         private static string Value(string path, string section, string key)
         {

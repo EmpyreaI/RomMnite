@@ -29,8 +29,7 @@ namespace RomM.Setup
     ///
     /// Which emulator: DuckStation (PS1), PCSX2 (PS2), PPSSPP (PSP), Dolphin (GameCube, Wii),
     /// RPCS3 (PS3), Xenia Canary (Xbox 360), Flycast (Dreamcast), Ruffle (Flash / browser),
-    /// Azahar (3DS), Cemu (Wii U), xemu (Xbox), Vita3K (PS Vita), Eden (Switch; from the RomM
-    /// server only), RetroArch with a core for the rest. RetroArch's cores, too, come from the
+    /// Azahar (3DS), Cemu (Wii U), xemu (Xbox), Vita3K (PS Vita), Eden (Switch), RetroArch with a core for the rest. RetroArch's cores, too, come from the
     /// RomM server when put there (emulator-libretro-&lt;core&gt;...zip), else from libretro's buildbot.
     /// </summary>
     internal sealed class EmulatorSetup
@@ -142,11 +141,11 @@ namespace RomM.Setup
             },
             ["eden"] = new Recipe
             {
-                // Eden publishes no download this can find by itself: put a copy on the RomM server
-                // (emulator-eden....zip). Portable with a "user" folder; prod.keys and title.keys
-                // from the server go in user\keys.
-                DefinitionId = "eden", Folder = "Eden", Source = "eden-emu.dev (put a copy on your RomM server)",
-                Url = null,
+                // Eden's stable Windows build (EdenUrl), or a copy put on the RomM server
+                // (emulator-eden....zip), which comes first. Portable with a "user" folder;
+                // prod.keys and title.keys from the server go in user\keys.
+                DefinitionId = "eden", Folder = "Eden", Source = "git.eden-emu.dev",
+                Url = EdenUrl,
                 PortableFolders = new[] { "user" }, BiosFolder = @"user\keys",
             },
             ["bigpemu"] = new Recipe
@@ -1076,7 +1075,7 @@ namespace RomM.Setup
         /// <summary>
         /// Of these RomM platforms, the ones an emulator could be set up for but not yet: a BIOS
         /// file it cannot do without is missing (see <see cref="MissingBios"/>), or the emulator
-        /// itself can only come from the RomM server and is not there (Eden). One look at the
+        /// itself can only come from the RomM server and is not there. One look at the
         /// server's firmware list for all of them. Platforms this cannot set up at all are not
         /// in it. Null when the list could not be read. Off the UI thread.
         /// </summary>
@@ -1143,7 +1142,7 @@ namespace RomM.Setup
         /// <summary>
         /// Everything setting a platform's emulator up needs from the RomM server (or already on
         /// this computer), each with whether it was found: the files BiosNeeds lists, and the
-        /// emulator itself when it can only come from the server (Eden). The same reckoning as
+        /// emulator itself when it can only come from the server. The same reckoning as
         /// PlatformsMissingFiles, item by item. Null when the platform cannot be set up or the
         /// server's list could not be read. Off the UI thread.
         /// </summary>
@@ -1458,6 +1457,39 @@ namespace RomM.Setup
                 s_log.Warn($"[EmulatorSetup] Could not read BigPEmu's download page: {ex.Message}");
                 return null;
             }
+        }
+
+        // Eden's newest stable release (its Forgejo's API, else its releases page), and that
+        // release's 64-bit MSVC build: stable.eden-emu.dev/<tag>/Eden-Windows-<tag>-amd64-msvc-standard.zip,
+        // as its releases page links them.
+        private static string EdenUrl()
+        {
+            string tag = null;
+            try
+            {
+                string json = s_web.GetStringAsync("https://git.eden-emu.dev/api/v1/repos/eden-emu/eden/releases/latest").GetAwaiter().GetResult();
+                tag = (string)JObject.Parse(json)["tag_name"];
+            }
+            catch (Exception ex)
+            {
+                s_log.Info($"[EmulatorSetup] Eden's release list could not be read ({ex.Message}); trying its releases page.");
+            }
+            if (string.IsNullOrEmpty(tag) || !Regex.IsMatch(tag, @"^v\d+(\.\d+)+$"))
+            {
+                try
+                {
+                    string page = s_web.GetStringAsync("https://git.eden-emu.dev/eden-emu/eden/releases").GetAwaiter().GetResult();
+                    // The newest release with a plain version (not an -rc), as the page lists them.
+                    Match found = Regex.Match(page, @"/eden-emu/eden/releases/tag/(v\d+(?:\.\d+)+)[""'?#]");
+                    tag = found.Success ? found.Groups[1].Value : null;
+                }
+                catch (Exception ex)
+                {
+                    s_log.Warn($"[EmulatorSetup] Could not read Eden's releases page: {ex.Message}");
+                    return null;
+                }
+            }
+            return tag == null ? null : $"https://stable.eden-emu.dev/{tag}/Eden-Windows-{tag}-amd64-msvc-standard.zip";
         }
 
         // RetroArch's stable build for the latest release: buildbot.libretro.com/stable/<version>/...

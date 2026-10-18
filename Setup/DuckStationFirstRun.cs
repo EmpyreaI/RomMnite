@@ -169,6 +169,38 @@ namespace RomM.Setup
             return sb.ToString();
         }
 
+        /// <summary>
+        /// Controller 2 on the second gamepad SDL knows (SDL-1), when two are connected and
+        /// [Pad2] is still "None" with nothing bound, as DuckStation starts. Once set it stays
+        /// (a controller left on an empty port is harmless); bindings there are the user's.
+        /// </summary>
+        internal static void SecondPlayer(string installDir, int gamepads)
+        {
+            if (gamepads < 2)
+                return;
+            try
+            {
+                string ini = Path.Combine(DataRoot(installDir), "settings.ini");
+                if (!File.Exists(ini))
+                    return;
+                List<string> lines = File.ReadAllLines(ini).ToList();
+                string type = Value(lines, "Pad2", "Type");
+                if (type != null && !string.Equals(type, "None", StringComparison.OrdinalIgnoreCase))
+                    return;
+                if (SectionLines(lines, "Pad2").Any(l => KeyOf(l) != null && !string.Equals(KeyOf(l), "Type", StringComparison.OrdinalIgnoreCase)))
+                    return;
+                var values = new Dictionary<string, string> { ["Type"] = "AnalogController" };
+                foreach (string[] binding in PadBindings)
+                    values[binding[0]] = binding[1].Replace("SDL-0/", "SDL-1/");
+                if (Account.SettingsFile.SetIni(ini, "Pad2", values, create: false))
+                    s_log.Info($"[EmulatorSetup] DuckStation: controller 2 on the second gamepad ({ini}).");
+            }
+            catch (Exception ex)
+            {
+                s_log.Warn($"[EmulatorSetup] DuckStation: could not set controller 2: {ex.Message}");
+            }
+        }
+
         // A binding list is the key repeated, one value each (INISettingsInterface string lists).
         private static List<string> PadSection()
         {

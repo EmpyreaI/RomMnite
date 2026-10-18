@@ -281,6 +281,7 @@ namespace RomM
             _steamIdsPath = Path.Combine(Playnite.Paths.ExtensionsDataPath, Id.ToString(), "SteamIds.json");
 
             Sessions = new PlaySessions(Path.Combine(Playnite.Paths.ExtensionsDataPath, Id.ToString(), "PlaySessions.json"));
+            OpenGames = new OpenSessions(Path.Combine(Playnite.Paths.ExtensionsDataPath, Id.ToString(), "OpenSessions.json"));
 
             Videos = new RomMVideoStore(Path.Combine(Playnite.Paths.ExtensionsDataPath, Id.ToString(), "Videos.json"));
 
@@ -290,8 +291,14 @@ namespace RomM
             SaveAccounts = new SaveAccounts(this, Path.Combine(Playnite.Paths.ExtensionsDataPath, Id.ToString()));
             EmulatorAchievements = new EmulatorAchievements(this, Path.Combine(Playnite.Paths.ExtensionsDataPath, Id.ToString()));
             ArtCache = new LibraryArtCache(this, Path.Combine(Playnite.Paths.ExtensionsDataPath, Id.ToString()));
+            // The community's controller list: handed to the SDL emulators Playnite starts, and read
+            // by the library's Controller section; fetched in the background when missing or old.
+            ControllerDatabase.Start(Path.Combine(Playnite.Paths.ExtensionsDataPath, Id.ToString()));
             // Ludusavi (Windows games' saves): fetched into Tools\ when missing, then those games synced.
             Saves.Handlers.LudusaviSaveHandler.ToolsFolder = Path.Combine(Playnite.Paths.ExtensionsDataPath, Id.ToString(), "Tools");
+            // SDL3, for giving Cemu, Eden, Dolphin and RPCS3 their controller as they will see it
+            // (Setup.ControllerProbe): fetched in the background once one of them is set up.
+            Setup.ControllerProbe.SetToolsFolder(Path.Combine(Playnite.Paths.ExtensionsDataPath, Id.ToString(), "Tools"));
             Saves.Handlers.LudusaviInstaller.Installed += () => SaveSync?.SyncLudusaviGames();
             // Also foreground: a game running or starting (checked at most once a second), and a
             // download in progress.
@@ -485,6 +492,14 @@ namespace RomM
         {
             base.OnApplicationStarted(args);
             Versions?.Start();
+            // Windows signing out or shutting down: no question then (FinishBeforeQuit).
+            try
+            {
+                System.Windows.Application.Current.SessionEnding += (s, e) => _windowsEnding = true;
+            }
+            catch
+            {
+            }
 
             // The Store loads out of sight, but only once the library is there: Playnite's own
             // start-up done and no library update running (they share the server, and the update
@@ -507,10 +522,24 @@ namespace RomM
                     Logger.Info($"[Store] The library is ready ({(now - started).TotalSeconds:0} s after start-up); the store loads in the background.");
                     // Cloud saves first: every installed game's synced (they are foreground, so
                     // the Store's loading waits for them), then watched for while offline.
+                    // Sessions the last run left open (Playnite quit or crashed mid-game) first,
+                    // so their saves are in the sync that follows.
+                    RecoverSessions();
                     SaveSync.StartBackground();
                     CloudStatus.RequestStorePreload();
                     // The library games' artwork not on disk yet, in the background lane behind it.
                     ArtCache?.Start();
+                    // SDL3 for the emulators that need it for their controller, once the library is up.
+                    try
+                    {
+                        if (Playnite.Database.Emulators.Any(emulator => new[] { "cemu", "eden", "dolphin", "rpcs3" }
+                                .Contains((emulator.BuiltInConfigId ?? "").ToLowerInvariant())))
+                            Setup.ControllerProbe.EnsureInBackground();
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Debug($"[Controllers] Could not look through the emulators: {ex.Message}");
+                    }
                 };
                 preload.Start();
             }
@@ -697,6 +726,9 @@ namespace RomM
             base.OnApplicationStopped(args);
             // A game left paused under the overlay is let go.
             _overlay?.Stop();
+            // A game still running is closed first (Playnite is quitting and cannot be stopped
+            // from here, but it waits for this).
+            FinishBeforeQuit();
 
             Playnite.Database.Games.ItemUpdated -= OnItemUpdated;
 
@@ -800,6 +832,12 @@ namespace RomM
 
         /// <summary>Recent play sessions, for "Last two weeks" on the library's hover cards.</summary>
         public PlaySessions Sessions { get; }
+
+        /// <summary>The games playing now, kept on disk so a session Playnite drops is finished later.</summary>
+        internal OpenSessions OpenGames { get; }
+
+        // The closing save sync of the last game stopped (waited for when quitting).
+        private Task _endingSync;
 
         /// <summary>Steam's descriptions, for games RomM has matched on Steam.</summary>
         public SteamDescriptions Steam { get; }
@@ -2444,7 +2482,10 @@ namespace RomM
         {
             base.OnGameStarted(args);
             if (args?.Game != null)
+            {
                 ClearLaunching(args.Game.Id);
+                OpenGames.Started(args.Game.Id, args.Game.Name, args.StartedProcessId, args.Game.Playtime, CurrentAccountKey);
+            }
             // The overlay: RomM's games, and Windows games from any library (GameOverlay decides,
             // by the settings).
             if (args?.Game != null && (args.Game.PluginId == Id || Overlay.GameOverlay.IsPc(args.Game)))
@@ -2977,6 +3018,10 @@ namespace RomM
             _rommUserId = -1;
             RefreshRetroAchievementsProfile();
 
+            // A new account starts with nothing to go back to: whatever was recorded while
+            // signed out (or the start-up's first pages, before the account was known) is not its.
+            History.Clear();
+
             // Someone is signed in: the window shows the library again (once synced).
             Account.SignedOutCurtain.Hide();
         }
@@ -3080,6 +3125,20 @@ namespace RomM
 
             foreach (var badge in _accountBadges)
                 badge.Refresh();
+
+            // Nothing of this account's browsing is left for the next: the library at Home, the
+            // Store reset, and back and forward emptied (else the arrows lead into its pages).
+            try
+            {
+                CloudStatus.StoreVisible = false;
+                ShowLibraryPage("Home");
+                CloudStatus.LeaveAccount();
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"[Account] Could not reset the pages on signing out: {ex.Message}");
+            }
+            History.Clear();
 
             // Signing in is required: back to the sign-in window, over an empty window.
             Account.SignedOutCurtain.Show();
@@ -3505,10 +3564,12 @@ namespace RomM
                 {
                     // The emulator's own menu on Start + Select, unless the overlay is on those
                     // buttons itself (Back + Start), which would open both.
-                    string overlayButton = Settings?.OverlayButton ?? "Guide";
+                    // The button the overlay opens with this time: Start + Select when Steam, the
+                    // Xbox Game Bar or Playnite has the Home button (Overlay.GameOverlay).
+                    string overlayButton = Overlay.GameOverlay.EffectiveButton(Settings?.OverlayButton ?? "Guide", Playnite);
                     bool menus = Settings?.EmulatorMenusOnStartSelect != false && overlayButton != "BackStart";
                     Setup.EmulatorLaunch.PrepareSettings(launching.Emulator, PlaynitePath.Resolve(Playnite, launching.Emulator.InstallDir),
-                        menus, overlayButton == "Guide",
+                        menus, overlayButton == "Guide", overlayButton == "BackStart",
                         Settings?.EmulatorsAtDisplayResolution != false, Path.Combine(GetPluginUserDataPath(), "EmulatorUpscale.txt"));
                 }
             }
@@ -3969,39 +4030,184 @@ namespace RomM
         {
             base.OnGameStopped(args);
             _overlay?.Stop();
-            if (args?.Game != null)
-                ClearLaunching(args.Game.Id);
+            if (args?.Game == null)
+                return;
+            ClearLaunching(args.Game.Id);
+            OpenGames.Stopped(args.Game.Id);
+            if (_finishedByUs.TryRemove(args.Game.Id, out byte _))
+                return;   // finished already while quitting (FinishBeforeQuit)
+            Task sync = EndSession(args.Game, args.ElapsedSeconds, DateTime.UtcNow);
+            if (sync != null)
+                _endingSync = sync;
+        }
 
+        private volatile bool _windowsEnding;
+
+        // Sessions finished here while quitting, which Playnite then saw end too.
+        private readonly ConcurrentDictionary<Guid, byte> _finishedByUs = new ConcurrentDictionary<Guid, byte>();
+
+        /// <summary>
+        /// What follows a session: "Last two weeks", and for RomM's games the closing save sync,
+        /// achievements and the play session on the server. The save sync's task, or null.
+        /// </summary>
+        private Task EndSession(Game game, ulong seconds, DateTime endedUtc)
+        {
             // Remembered for "Last two weeks" on the library's hover cards, for every game.
-            if (args.Game != null && args.ElapsedSeconds > 0)
+            if (seconds > 0)
             {
-                Guid playedId = args.Game.Id;
-                ulong played = args.ElapsedSeconds;
-                Task.Run(() => Sessions.Add(playedId, played));
+                Guid playedId = game.Id;
+                Task.Run(() => Sessions.Add(playedId, seconds));
             }
 
-            if (args.Game.PluginId == PluginId)
+            if (game.PluginId != PluginId)
+                return null;
+            Task sync = Task.Run(() => SaveSync.EndSession(game));
+
+            // What was unlocked: RomM fetches it from RetroAchievements, then it is shown;
+            // trophies and Xbox achievements are read from the emulator.
+            if (seconds > 0)
+                RefreshServerAchievements(game);
+            EmulatorAchievements.SessionEnded(game);
+
+            // The session goes to the account's play sessions on the server.
+            if (seconds > 0 && RomMGameId.TryParse(game.GameId, out int playedRomId, out string _))
             {
-                var game = args.Game;
-                Task.Run(() => SaveSync.EndSession(game));
-
-                // What was unlocked: RomM fetches it from RetroAchievements, then it is shown;
-                // trophies and Xbox achievements are read from the emulator.
-                if (args.ElapsedSeconds > 0)
-                    RefreshServerAchievements(game);
-                EmulatorAchievements.SessionEnded(game);
-
-                // The session goes to the account's play sessions on the server.
-                if (args.ElapsedSeconds > 0 && RomMGameId.TryParse(game.GameId, out int playedRomId, out string _))
+                Task.Run(() =>
                 {
-                    ulong seconds = args.ElapsedSeconds;
-                    DateTime ended = DateTime.UtcNow;
+                    UserData.QueueSession(playedRomId, endedUtc, seconds);
+                    ScheduleSync(TimeSpan.FromSeconds(5));
+                });
+            }
+            return sync;
+        }
+
+        /// <summary>
+        /// A session Playnite dropped (it quit or crashed with the game running), finished as
+        /// OnGameStopped would have: its playtime (only if Playnite did not count it), then
+        /// <see cref="EndSession"/> when the same account is signed in. The save sync's task, or null.
+        /// </summary>
+        private Task FinishLeftOver(OpenSessions.Entry entry, DateTime endedUtc)
+        {
+            Game game = Playnite.Database.Games.Get(entry.GameId);
+            if (game == null)
+                return null;
+            ulong seconds = endedUtc > entry.StartedUtc ? (ulong)(endedUtc - entry.StartedUtc).TotalSeconds : 0;
+            if (seconds > 0 && game.Playtime == entry.PlaytimeAtStart)
+            {
+                game.Playtime += seconds;
+                Playnite.Database.Games.Update(game);
+            }
+            Logger.Info($"[Sessions] {game.Name}: a session Playnite did not end ({seconds / 60} min) finished now.");
+            if (!string.Equals(entry.AccountKey, CurrentAccountKey, StringComparison.OrdinalIgnoreCase))
+            {
+                Logger.Info($"[Sessions] {game.Name}: it was another account's; only its playtime is counted.");
+                return null;
+            }
+            return EndSession(game, seconds, endedUtc);
+        }
+
+        /// <summary>
+        /// On start-up: the sessions the last run left open. A game still running (same process)
+        /// is finished when it closes; one that has closed, counted to when Playnite last saw it.
+        /// </summary>
+        private void RecoverSessions()
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(CurrentAccountKey))
+                    return;   // the next start, once someone is signed in
+                foreach (OpenSessions.Entry entry in OpenGames.TakeLeftOver())
+                {
+                    if (OpenGames.IsOpen(entry.GameId))
+                        continue;   // started again since
+                    System.Diagnostics.Process process = OpenSessions.StillRunning(entry);
+                    if (process == null)
+                    {
+                        FinishLeftOver(entry, entry.SeenUtc);
+                        continue;
+                    }
+                    Logger.Info($"[Sessions] {entry.Name} is still running from before Playnite restarted; its session ends when it closes.");
+                    System.Windows.Threading.Dispatcher ui = Playnite.MainView.UIDispatcher;
                     Task.Run(() =>
                     {
-                        UserData.QueueSession(playedRomId, ended, seconds);
-                        ScheduleSync(TimeSpan.FromSeconds(5));
+                        using (process)
+                            process.WaitForExit();
+                        ui.BeginInvoke(new Action(() => FinishLeftOver(entry, DateTime.UtcNow)));
                     });
                 }
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"[Sessions] Could not finish the sessions left open: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Playnite is quitting with a game running (any way it quits: its menu, the tray, the
+        /// window's close button, Fullscreen's menu). It cannot be stopped here, but it waits for
+        /// this: the game is closed first (the overlay's countdown), then its session ended and
+        /// its saves synced before Playnite goes. Playnite does not quit leaving a game running.
+        /// One that cannot be closed from here (no process known) is finished on the next start
+        /// (RecoverSessions).
+        /// </summary>
+        private void FinishBeforeQuit()
+        {
+            try
+            {
+                List<OpenSessions.Entry> running = OpenGames?.Running();
+                if (running == null || running.Count == 0)
+                    return;
+                if (_windowsEnding)
+                {
+                    Logger.Info("[Sessions] Windows is ending the session; the running game's session is finished on the next start.");
+                    return;
+                }
+                string names = string.Join(", ", running.Select(r => r.Name));
+                Logger.Info($"[Sessions] Playnite is quitting with {names} running: closing it first.");
+
+                Playnite.Dialogs.ActivateGlobalProgress(progress =>
+                {
+                    foreach (OpenSessions.Entry entry in running)
+                    {
+                        Game game = Playnite.Database.Games.Get(entry.GameId);
+                        // The overlay's (a Windows game's window in front), else the process Playnite
+                        // started, if it is still that one. None (a game started by a URL, or by a
+                        // launcher that has gone): it cannot be closed from here.
+                        int pid = _overlay != null && _overlay.GameId == entry.GameId ? _overlay.QuitProcessId : 0;
+                        if (pid <= 0)
+                        {
+                            using (System.Diagnostics.Process started = OpenSessions.StillRunning(entry))
+                                pid = started?.Id ?? 0;
+                        }
+                        bool gone = pid > 0 && Overlay.GameOverlay.CloseGameAndWait(pid, entry.Name, Overlay.GameOverlay.GraceFor(game),
+                            text => progress.Text = $"Closing {entry.Name}... {text}");
+                        if (!gone)
+                        {
+                            Logger.Info($"[Sessions] {entry.Name} could not be closed from here; its session is finished on the next start.");
+                            continue;
+                        }
+
+                        // Playnite's own ending (its playtime, OnGameStopped), if it sees the game go in time.
+                        progress.Text = $"Saving {entry.Name}...";
+                        DateTime until = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+                        while (OpenGames.IsOpen(entry.GameId) && DateTime.UtcNow < until)
+                            Thread.Sleep(200);
+                        if (OpenGames.IsOpen(entry.GameId))
+                        {
+                            OpenGames.Stopped(entry.GameId);
+                            _finishedByUs[entry.GameId] = 0;
+                            Task sync = FinishLeftOver(entry, DateTime.UtcNow);
+                            if (sync != null)
+                                _endingSync = sync;
+                        }
+                    }
+                    progress.Text = "Syncing saves...";
+                    _endingSync?.Wait(TimeSpan.FromSeconds(60));
+                }, new GlobalProgressOptions($"Closing {names}...", false) { IsIndeterminate = true });
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"[Sessions] Could not close the running game before quitting: {ex.Message}");
             }
         }
 

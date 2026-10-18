@@ -62,6 +62,111 @@ namespace RomM.Setup
             }
         }
 
+        /// <summary>
+        /// The overlay opens with Start + Select (chosen, or the Home button being taken by
+        /// Steam, the Xbox Game Bar or Playnite): the emulators' menus put on Start + Select here
+        /// are taken off it again, so one press does not open both. Their keyboard keys stay.
+        /// </summary>
+        public static void Release(string id, string installDir)
+        {
+            try
+            {
+                if (id.Contains("duckstation"))
+                    DuckStyleRelease("DuckStation", Path.Combine(DuckStationFirstRun.DataRoot(installDir), "settings.ini"));
+                else if (id.Contains("pcsx2"))
+                    DuckStyleRelease("PCSX2", FirstExisting(Path.Combine(installDir, "inis", "PCSX2.ini"),
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "PCSX2", "inis", "PCSX2.ini")));
+                else if (id.Contains("retroarch"))
+                    RetroArchRelease(FirstExisting(Path.Combine(installDir, "retroarch.cfg"),
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "RetroArch", "retroarch.cfg")));
+                else if (id.Contains("ppsspp"))
+                    PpssppRelease(Directory.Exists(Path.Combine(installDir, "memstick"))
+                        ? Path.Combine(installDir, "memstick", "PSP", "SYSTEM", "controls.ini")
+                        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "PPSSPP", "PSP", "SYSTEM", "controls.ini"));
+            }
+            catch (Exception ex)
+            {
+                s_log.Warn($"[EmulatorMenus] Could not take the emulator's menu off Start + Select: {ex.Message}");
+            }
+        }
+
+        // The chord written here: two controller inputs joined by '&' (Select & Start).
+        private static void DuckStyleRelease(string name, string ini)
+        {
+            if (ini == null || !File.Exists(ini))
+                return;
+            List<string> lines = File.ReadAllLines(ini).ToList();
+            int section = Header(lines, "Hotkeys");
+            if (section < 0)
+                return;
+            int end = SectionEnd(lines, section);
+            int removed = 0;
+            for (int i = end - 1; i > section; i--)
+            {
+                if (!string.Equals(Key(lines[i]), "OpenPauseMenu", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                string[] parts = lines[i].Substring(lines[i].IndexOf('=') + 1).Split('&').Select(p => p.Trim()).ToArray();
+                bool chord = parts.Length == 2 && parts.All(IsPad)
+                    && parts.Any(p => p.EndsWith("/Start", StringComparison.OrdinalIgnoreCase))
+                    && parts.Any(p => p.EndsWith("/Back", StringComparison.OrdinalIgnoreCase) || p.EndsWith("/Select", StringComparison.OrdinalIgnoreCase));
+                if (!chord)
+                    continue;
+                lines.RemoveAt(i);
+                removed++;
+            }
+            if (removed == 0)
+                return;
+            File.WriteAllLines(ini, lines, new UTF8Encoding(false));
+            s_log.Info($"[EmulatorMenus] {name}: its menu taken off Start + Select, which opens the overlay ({ini}).");
+        }
+
+        // Start + Select (combo 4, as written here where none was set) back to none, and the
+        // "no button" written for the Home button back to unset.
+        private static void RetroArchRelease(string cfg)
+        {
+            if (cfg == null)
+                return;
+            List<string> lines = File.ReadAllLines(cfg).ToList();
+            var wanted = new Dictionary<string, string>();
+            if (CfgValue(lines, "input_menu_toggle_gamepad_combo") == "4")
+                wanted["input_menu_toggle_gamepad_combo"] = "0";
+            if (CfgValue(lines, "input_menu_toggle_btn") == RetroArchNoButton)
+                wanted["input_menu_toggle_btn"] = "nul";
+            if (wanted.Count == 0)
+                return;
+            if (Account.SettingsFile.SetCfg(cfg, wanted))
+                s_log.Info($"[EmulatorMenus] RetroArch: its menu taken off Start + Select, which opens the overlay ({cfg}).");
+        }
+
+        // Select + Start back to Home, PPSSPP's own default.
+        private static void PpssppRelease(string ini)
+        {
+            if (!File.Exists(ini))
+                return;
+            List<string> lines = File.ReadAllLines(ini).ToList();
+            int section = Header(lines, "ControlMapping");
+            if (section < 0)
+                return;
+            int end = SectionEnd(lines, section);
+            for (int i = section + 1; i < end; i++)
+            {
+                if (!string.Equals(Key(lines[i]), "Pause", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                string value = lines[i].Substring(lines[i].IndexOf('=') + 1).Trim();
+                var parts = value.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).Select(p => p.Trim()).ToList();
+                int chord = parts.FindIndex(p => p == "20-109:20-108" || p == "20-108:20-109");
+                if (chord < 0)
+                    return;
+                parts.RemoveAt(chord);
+                if (!parts.Contains("20-3"))
+                    parts.Insert(chord, "20-3");
+                lines[i] = "Pause = " + string.Join(",", parts);
+                File.WriteAllLines(ini, lines, new UTF8Encoding(false));
+                s_log.Info($"[EmulatorMenus] PPSSPP: its pause menu back on Home, off Select + Start ({ini}).");
+                return;
+            }
+        }
+
         private static string FirstExisting(params string[] paths) => paths.FirstOrDefault(File.Exists);
 
         private static bool IsPad(string binding) =>

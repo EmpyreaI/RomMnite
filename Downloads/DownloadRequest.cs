@@ -23,6 +23,12 @@ namespace RomM.Downloads
 
         // Callbacks
         public Action<GameInstalledEventArgs> OnInstalled { get; set; }
+
+        /// <summary>
+        /// The size of what was downloaded (the server's whole file, as "Downloading data" shows
+        /// it), set once the download is done, before <see cref="OnInstalled"/>; 0 when unknown.
+        /// </summary>
+        public long DownloadedSize { get; set; }
         public Action OnCanceled { get; set; }
         public Action<Exception> OnFailed { get; set; }
     }

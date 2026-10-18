@@ -242,6 +242,9 @@ namespace RomM.Store
                 };
             }
 
+            // Signed out: nothing of the last account's browsing is kept.
+            _plugin.CloudStatus.AccountLeft += () => Dispatcher.BeginInvoke(new Action(ForgetPlace));
+
             // The STORE tab's menu: Home.
             _plugin.CloudStatus.StoreDirectoryRequested += which => Dispatcher.BeginInvoke(new Action(() =>
             {
@@ -1241,6 +1244,34 @@ namespace RomM.Store
                 _browseEntry = entry;
             if (_plugin.CloudStatus.StoreVisible)
                 _plugin.History?.Record(entry);
+        }
+
+        // Signed out: the Store goes back to Home, out of sight, with no game's page, search or
+        // place to return to, so the next account does not open it where the last one left it.
+        private void ForgetPlace()
+        {
+            try
+            {
+                ShowBrowse();
+                _pendingRomId = 0;
+                _pendingDirectory = null;
+                _goingToGame = false;
+                ClearFilters(null);
+                if (_platforms.Items.Count > 0)
+                {
+                    if (_platforms.SelectedIndex == 0)
+                        ShowHome();
+                    else
+                        _platforms.SelectedIndex = 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                s_log.Warn($"[Store] Could not reset after signing out: {ex.Message}");
+            }
+            // Whatever Home recorded on the way, nothing is left to come back to.
+            _storeCurrent = null;
+            _browseEntry = null;
         }
 
         // Shows a Store place that back or forward led to.

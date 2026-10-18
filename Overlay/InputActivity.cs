@@ -9,9 +9,8 @@ namespace RomM.Overlay
     /// only the buttons of the one in use (as Steam's do). Controllers are watched through XInput
     /// (a packet number that moves whenever a pad's state changes; read without taking the pad
     /// from anything); the keyboard and mouse through Windows' own last-input time, which
-    /// controllers do not move. Controllers other than XInput ones cannot be watched without
-    /// taking them from the emulators, so with one of those the keyboard counts as in use,
-    /// which suits the prompts: only the keyboard opens the overlay for them.
+    /// controllers do not move. Other controllers (Switch, PlayStation...) are noted as used by
+    /// the overlay, which reads them while a game runs (HidPads, NotePad).
     /// </summary>
     internal static class InputActivity
     {
@@ -42,6 +41,9 @@ namespace RomM.Overlay
                 return keyboard == long.MinValue || pad > keyboard;
             }
         }
+
+        /// <summary>A controller read another way (HidPads: Switch, PlayStation...) was used now.</summary>
+        public static void NotePad() => Interlocked.Exchange(ref s_lastPadTick, Now());
 
         // ---- The controller ------------------------------------------------------------------
 

@@ -146,6 +146,14 @@ namespace RomM.Saves
             PressStoreTab();
         }
 
+        /// <summary>
+        /// Raised when the account signs out: the Store lets go of where it was (its last page,
+        /// a game's page, a search), so the next account starts at its Home.
+        /// </summary>
+        public event System.Action AccountLeft;
+
+        public void LeaveAccount() => AccountLeft?.Invoke();
+
         private bool _storeVisible;
 
         /// <summary>Whether the Store is showing in place of the library.</summary>

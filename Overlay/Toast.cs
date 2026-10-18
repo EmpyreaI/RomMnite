@@ -31,7 +31,57 @@ namespace RomM.Overlay
         public static void Show(string title, string message, string picture = null, string glyph = null, Action onClick = null,
             IntPtr screenOf = default(IntPtr), double seconds = 6)
         {
-            Application.Current?.Dispatcher?.BeginInvoke(new Action(() => Open(title, message, picture, glyph, onClick, screenOf, seconds)));
+            Application.Current?.Dispatcher?.BeginInvoke(new Action(() => Open(title, message, picture, glyph, onClick, screenOf, seconds, null)));
+        }
+
+        /// <summary>
+        /// A pop-up that stays until it is closed, whose message can change while it shows (a
+        /// countdown). Callable from any thread.
+        /// </summary>
+        public static Live ShowLive(string title, string message, string glyph = null, IntPtr screenOf = default(IntPtr))
+        {
+            var live = new Live();
+            Application.Current?.Dispatcher?.BeginInvoke(new Action(() => Open(title, message, null, glyph, null, screenOf, 0, live)));
+            return live;
+        }
+
+        /// <summary>A pop-up shown with <see cref="ShowLive"/>.</summary>
+        public sealed class Live
+        {
+            internal TextBlock Message;
+            internal Action CloseNow;
+            private bool _closeWhenShown;
+
+            /// <summary>Its message now.</summary>
+            public void Update(string message) => OnUi(() =>
+            {
+                if (Message != null)
+                    Message.Text = message ?? "";
+            });
+
+            /// <summary>Takes it away at once (no fade), now or after <paramref name="after"/>.</summary>
+            public void Close(TimeSpan after = default(TimeSpan)) => OnUi(() =>
+            {
+                if (after > TimeSpan.Zero)
+                {
+                    var wait = new DispatcherTimer { Interval = after };
+                    wait.Tick += (s, e) =>
+                    {
+                        wait.Stop();
+                        Close();
+                    };
+                    wait.Start();
+                    return;
+                }
+                if (CloseNow != null)
+                    CloseNow();
+                else
+                    _closeWhenShown = true;
+            });
+
+            internal bool CloseWhenShown => _closeWhenShown;
+
+            private static void OnUi(Action action) => Application.Current?.Dispatcher?.BeginInvoke(action);
         }
 
         [DllImport("user32.dll")]
@@ -51,7 +101,7 @@ namespace RomM.Overlay
             Show("Achievement unlocked", line, picture, "\uE734", null, GetForegroundWindow(), 7);
         }
 
-        private static void Open(string title, string message, string picture, string glyph, Action onClick, IntPtr screenOf, double seconds)
+        private static void Open(string title, string message, string picture, string glyph, Action onClick, IntPtr screenOf, double seconds, Live live)
         {
             var window = new Window
             {
@@ -75,8 +125,13 @@ namespace RomM.Overlay
             row.Children.Add(left);
             var words = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 0, 0) };
             words.Children.Add(new TextBlock { Text = title ?? "", FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White, TextTrimming = TextTrimming.CharacterEllipsis });
-            if (!string.IsNullOrEmpty(message))
-                words.Children.Add(new TextBlock { Text = message, FontSize = 12.5, Foreground = new SolidColorBrush(Color.FromArgb(0xC8, 0xFF, 0xFF, 0xFF)), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 3, 0, 0) });
+            if (!string.IsNullOrEmpty(message) || live != null)
+            {
+                var text = new TextBlock { Text = message ?? "", FontSize = 12.5, Foreground = new SolidColorBrush(Color.FromArgb(0xC8, 0xFF, 0xFF, 0xFF)), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 3, 0, 0) };
+                words.Children.Add(text);
+                if (live != null)
+                    live.Message = text;
+            }
             row.Children.Add(words);
             var card = new Border
             {
@@ -127,9 +182,29 @@ namespace RomM.Overlay
                 card.BeginAnimation(UIElement.OpacityProperty, fade);
             };
             life.Tick += (s, e) => close();
+            if (live != null)
+            {
+                // Stays until closed (Live.Close), and then goes at once: what it counted down to
+                // has happened, so it does not linger fading.
+                Action gone = () =>
+                {
+                    life.Stop();
+                    if (!s_open.Remove(window))
+                        return;
+                    window.Close();
+                    Restack(area);
+                };
+                live.CloseNow = gone;
+                if (live.CloseWhenShown)
+                    window.Loaded += (s, e) => gone();
+            }
             // Pointed at: it stays while the pointer is on it.
             card.MouseEnter += (s, e) => life.Stop();
-            card.MouseLeave += (s, e) => life.Start();
+            card.MouseLeave += (s, e) =>
+            {
+                if (live == null)
+                    life.Start();
+            };
             card.MouseLeftButtonUp += (s, e) =>
             {
                 try
@@ -144,7 +219,8 @@ namespace RomM.Overlay
             };
 
             window.Show();
-            life.Start();
+            if (live == null)
+                life.Start();   // a live one stays until it is closed
         }
 
         // The open cards, newest at the bottom, the rest above it.
