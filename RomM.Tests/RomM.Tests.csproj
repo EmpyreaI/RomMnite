@@ -45,6 +45,7 @@
     <Compile Include="..\Games\RomMGameId.cs" Link="Linked\Games\RomMGameId.cs" />
     <Compile Include="..\Games\RomMGameInfo.cs" Link="Linked\Games\RomMGameInfo.cs" />
     <Compile Include="..\Games\RomMMetadataMapper.cs" Link="Linked\Games\RomMMetadataMapper.cs" />
+    <Compile Include="..\Games\SameGame.cs" Link="Linked\Games\SameGame.cs" />
     <Compile Include="..\Games\RomMServerVersion.cs" Link="Linked\Games\RomMServerVersion.cs" />
     <Compile Include="..\Games\RomMRomQuery.cs" Link="Linked\Games\RomMRomQuery.cs" />
     <Compile Include="..\Games\RomMUrl.cs" Link="Linked\Games\RomMUrl.cs" />
@@ -76,6 +77,17 @@
     <Compile Include="..\Saves\LudusaviSaveTarget.cs" Link="Linked\Saves\LudusaviSaveTarget.cs" />
     <Compile Include="..\Saves\FolderSetSaveTarget.cs" Link="Linked\Saves\FolderSetSaveTarget.cs" />
     <Compile Include="..\Saves\SaveFolderMap.cs" Link="Linked\Saves\SaveFolderMap.cs" />
+    <!-- What the files above use (kept in step as they grow). LudusaviInstaller is a stub
+         (Stubs\LudusaviInstaller.cs): the real one sets Ludusavi up through EmulatorSetup (WPF). -->
+    <Compile Include="..\Games\SeriesNames.cs" Link="Linked\Games\SeriesNames.cs" />
+    <Compile Include="..\Games\SteamDescriptions.cs" Link="Linked\Games\SteamDescriptions.cs" />
+    <Compile Include="..\Games\LaunchFiles.cs" Link="Linked\Games\LaunchFiles.cs" />
+    <Compile Include="..\Saves\LudusaviTitles.cs" Link="Linked\Saves\LudusaviTitles.cs" />
+    <Compile Include="..\Saves\Handlers\AzaharSaveHandler.cs" Link="Linked\Saves\Handlers\AzaharSaveHandler.cs" />
+    <Compile Include="..\Saves\Handlers\CemuSaveHandler.cs" Link="Linked\Saves\Handlers\CemuSaveHandler.cs" />
+    <Compile Include="..\Saves\Handlers\Vita3KSaveHandler.cs" Link="Linked\Saves\Handlers\Vita3KSaveHandler.cs" />
+    <Compile Include="..\Saves\Handlers\EdenSaveHandler.cs" Link="Linked\Saves\Handlers\EdenSaveHandler.cs" />
+    <Compile Include="..\Saves\Handlers\RuffleSaveHandler.cs" Link="Linked\Saves\Handlers\RuffleSaveHandler.cs" />
   </ItemGroup>
 
   <!-- The version declarations PluginVersionTests compares. Copied rather than read from the

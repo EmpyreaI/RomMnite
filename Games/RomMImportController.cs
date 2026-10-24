@@ -57,7 +57,9 @@ namespace RomM.Games
             // RetroAchievements from RomM, displayed through SuccessStory when it is installed.
             var achievements = RomMAchievementSync.Create(Logger, _plugin.Settings.RomMHost, args.CancelToken, _plugin.AchievementStore);
 
-            // Pull ROM data for each enabled mapping and add the games to playnite
+            // Pull ROM data for each enabled mapping, then add the games to playnite (after, so
+            // one platform's version can lend another its media: SameGame.LendAcross).
+            var fetched = new List<KeyValuePair<EmulatorMapping, List<RomMRom>>>();
             foreach (var mapping in enabledMappings)
             {
                 if (args.CancelToken.IsCancellationRequested)
@@ -106,11 +108,32 @@ namespace RomM.Games
                 }
                 Logger.Info($"[Import Controller] Finished parsing response for {apiPlatform.Name}.");
 
-                // Import games for the current mapping.
-                // ProcessData mutates the Playnite database (ImportGame/Update/Remove), which is not
-                // thread-safe, so each mapping is processed sequentially to avoid races/DependencySource
-                // errors. The expensive network fetch above already ran synchronously.
-                RomMImport newImport = new RomMImport(_plugin, args, mapping, romMROMs, favorites, achievements);
+                fetched.Add(new KeyValuePair<EmulatorMapping, List<RomMRom>>(mapping, romMROMs));
+            }
+
+            // Media a version lacks (ScreenScraper's fan art, logo, video; screenshots), from
+            // another platform's version of the same game: a Windows "Master Collection Version"
+            // with the PSP original's.
+            try
+            {
+                int lent = SameGame.LendAcross(fetched.SelectMany(f => f.Value).ToList());
+                if (lent > 0)
+                    Logger.Info($"[Import Controller] {lent} games given media they lack from another platform's version.");
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"[Import Controller] Could not share media between versions: {ex.Message}");
+            }
+
+            // Import games for each mapping.
+            // ProcessData mutates the Playnite database (ImportGame/Update/Remove), which is not
+            // thread-safe, so each mapping is processed sequentially to avoid races/DependencySource
+            // errors. The expensive network fetches above already ran synchronously.
+            foreach (var pair in fetched)
+            {
+                if (args.CancelToken.IsCancellationRequested)
+                    break;
+                RomMImport newImport = new RomMImport(_plugin, args, pair.Key, pair.Value, favorites, achievements);
                 games.AddRange(newImport.ProcessData());
             }
 
@@ -232,6 +255,8 @@ namespace RomM.Games
             // cancels, which suits a single game.
             var args = new LibraryImportGamesArgs();
 
+            // Fan art, logo, video it lacks: another platform's version's.
+            _plugin.LendFromOtherVersions(rom);
             new RomMImport(_plugin, args, mapping, new List<RomMRom> { rom }, favorites, achievements, partial: true).ProcessData();
 
             bool present = _plugin.Playnite.Database.Games.Any(g =>

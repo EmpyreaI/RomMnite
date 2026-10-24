@@ -14,8 +14,10 @@ namespace RomM.Tests
         private static Emulator RetroArch(Guid? id = null) =>
             new Emulator { Id = id ?? Guid.NewGuid(), Name = "RetroArch" };
 
-        private static Emulator Dolphin() =>
-            new Emulator { Id = Guid.NewGuid(), Name = "Cemu" };
+        // An emulator whose saves are not synced. (Was Cemu, until Cemu's saves were: this must
+        // name one with no save handler.)
+        private static Emulator Unsynced() =>
+            new Emulator { Id = Guid.NewGuid(), Name = "xemu" };
 
         private static SaveEmulatorCandidate FromAction(Emulator emulator, EmulatorProfile profile = null) =>
             new SaveEmulatorCandidate { Emulator = emulator, Profile = profile };
@@ -51,11 +53,11 @@ namespace RomM.Tests
 
             var resolution = SaveEmulatorResolver.Resolve(Handlers, new[]
             {
-                FromAction(Dolphin()),
+                FromAction(Unsynced()),
                 FromMapping(fromMapping),
             });
 
-            Assert.Equal("Cemu", resolution.Emulator?.Name);
+            Assert.Equal("xemu", resolution.Emulator?.Name);
             Assert.Null(resolution.Handler);
             Assert.Same(fromMapping, resolution.PassedOverMappingEmulator);
         }
@@ -101,11 +103,11 @@ namespace RomM.Tests
         {
             var resolution = SaveEmulatorResolver.Resolve(Handlers, new[]
             {
-                FromAction(Dolphin()),
-                FromMapping(new Emulator { Id = Guid.NewGuid(), Name = "Cemu" }),
+                FromAction(Unsynced()),
+                FromMapping(new Emulator { Id = Guid.NewGuid(), Name = "xemu" }),
             });
 
-            Assert.Equal("Cemu", resolution.Emulator?.Name);
+            Assert.Equal("xemu", resolution.Emulator?.Name);
             Assert.Null(resolution.Handler);
             Assert.Null(resolution.PassedOverMappingEmulator);
         }

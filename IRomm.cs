@@ -18,6 +18,12 @@ namespace RomM
         RomMRom FetchRom(string romId);
 
         /// <summary>
+        /// Media the ROM lacks (ScreenScraper's fan art, logo, video; screenshots) lent from
+        /// another platform's version of the same game on the server (Games.SameGame).
+        /// </summary>
+        void LendFromOtherVersions(RomMRom rom);
+
+        /// <summary>
         /// The emulator mapping a game was imported under, from its ROM sidecar, or null when the
         /// sidecar or the mapping is gone. Unlike the game's play action this follows the mapping
         /// as the user edits it, because every import rewrites the sidecar.

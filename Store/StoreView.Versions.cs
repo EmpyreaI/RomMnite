@@ -16,10 +16,12 @@ namespace RomM.Store
     /// platform here; the other platforms' versions are on its page, as Steam lists a game's
     /// editions.
     ///
-    /// The same game: the same IGDB or MobyGames id (both name a game, not a release, unlike
-    /// ScreenScraper's, which RomM's own "siblings" use for the same platform's regions and
-    /// revisions); or, where one has neither id, the same name. Two games with different IGDB
-    /// ids are never one, however alike their names (Doom of 1993 and of 2016).
+    /// The same game: Games.SameGame (the same IGDB or MobyGames id; IGDB listing one as the
+    /// other's port or remaster; the same ScreenScraper id on two platforms; one named as an
+    /// edition of the other, "... - Master Collection Version"; or, where one has neither id,
+    /// the same name). Two games with different IGDB ids and the same plain name are never one
+    /// (Doom of 1993 and of 2016). A version lacking ScreenScraper's media is shown with
+    /// another's (LendMedia).
     ///
     /// The best version: one whose platform is set up to play here first; then the platform's
     /// standing (Games.PlatformRanks: later and stronger home consoles over handhelds
@@ -39,91 +41,37 @@ namespace RomM.Store
             return (Playable(rom) ? 1000 : 0) + rank;
         }
 
-        private static int IdOf(JObject raw, string field)
-        {
-            JToken value = raw?[field];
-            if (value == null || value.Type == JTokenType.Null)
-                return 0;
-            return int.TryParse(value.ToString(), out int id) ? id : 0;
-        }
-
-        private static string VersionName(RomMRom rom) => Wishlist.Normalize(rom.Name ?? rom.FileNameNoExt ?? "");
-
         /// <summary>
         /// The items in groups of one game each, in the order the items came (a group where its
         /// first item was), each group's best version first.
         /// </summary>
         private List<List<HomeItem>> GroupVersions(List<HomeItem> items)
         {
-            int n = items.Count;
-            var parent = Enumerable.Range(0, n).ToArray();
-            Func<int, int> find = null;
-            find = i => parent[i] == i ? i : (parent[i] = find(parent[i]));
-            Action<int, int> join = (a, b) =>
-            {
-                int ra = find(a), rb = find(b);
-                if (ra != rb)
-                    parent[Math.Max(ra, rb)] = Math.Min(ra, rb);
-            };
-
-            var byIgdb = new Dictionary<int, int>();
-            var byMoby = new Dictionary<int, int>();
-            var byNameAny = new Dictionary<string, int>();
-            var byNameBare = new Dictionary<string, int>();   // items with neither id
-            var igdbOf = new int[n];
-            for (int i = 0; i < n; i++)
-            {
-                RomMRom rom = items[i].Rom;
-                int igdb = rom.IgdbId ?? 0;
-                int moby = IdOf(items[i].Raw, "moby_id");
-                igdbOf[i] = igdb;
-                string name = VersionName(rom);
-                if (igdb > 0)
-                {
-                    if (byIgdb.TryGetValue(igdb, out int other))
-                        join(i, other);
-                    else
-                        byIgdb[igdb] = i;
-                }
-                if (moby > 0)
-                {
-                    // Not across two different IGDB games.
-                    if (byMoby.TryGetValue(moby, out int other) && (igdb == 0 || igdbOf[other] == 0 || igdbOf[other] == igdb))
-                        join(i, other);
-                    else if (!byMoby.ContainsKey(moby))
-                        byMoby[moby] = i;
-                }
-                if (name.Length == 0)
-                    continue;
-                bool bare = igdb == 0 && moby == 0;
-                if (bare && byNameAny.TryGetValue(name, out int named))
-                    join(i, named);
-                else if (!bare && byNameBare.TryGetValue(name, out int unnamed))
-                    join(i, unnamed);
-                if (!byNameAny.ContainsKey(name))
-                    byNameAny[name] = i;
-                if (bare && !byNameBare.ContainsKey(name))
-                    byNameBare[name] = i;
-            }
-
-            var groups = new Dictionary<int, List<int>>();
-            var order = new List<int>();
-            for (int i = 0; i < n; i++)
-            {
-                int root = find(i);
-                if (!groups.TryGetValue(root, out List<int> members))
-                {
-                    groups[root] = members = new List<int>();
-                    order.Add(root);
-                }
-                members.Add(i);
-            }
-            return order.Select(root => groups[root]
+            List<List<int>> groups = global::RomM.Games.SameGame.Group(items.Select(i => global::RomM.Games.SameGame.Of(i.Rom, i.Raw)).ToList());
+            return groups.Select(group => group
                     .Select(i => items[i])
                     .OrderByDescending(VersionScore)
                     .ThenByDescending(i => i.Rom.FileSizeBytes)
                     .ToList())
                 .ToList();
+        }
+
+        /// <summary>
+        /// A version without ScreenScraper's fan art, logo, video or screenshots shows another
+        /// platform's version's (SameGame.Lend), its own kept where it has them: the Windows
+        /// "Master Collection Version" of a game with the PSP original's video and fan art, its own
+        /// Steam text and IGDB screenshots. True when anything was lent.
+        /// </summary>
+        private bool LendMedia(HomeItem item, IEnumerable<HomeItem> group)
+        {
+            if (item?.Rom == null || !global::RomM.Games.SameGame.LacksMedia(item.Rom))
+                return false;
+            List<HomeItem> others = group.Where(i => i?.Rom != null && i.Rom.PlatformId != item.Rom.PlatformId).ToList();
+            RomMRom donor = global::RomM.Games.SameGame.DonorFor(item.Rom, others.Select(i => i.Rom));
+            if (donor == null)
+                return false;
+            global::RomM.Games.SameGame.Lend(item.Raw, others.First(i => i.Rom.Id == donor.Id).Raw);
+            return global::RomM.Games.SameGame.Lend(item.Rom, donor);
         }
 
         /// <summary>
@@ -140,6 +88,7 @@ namespace RomM.Store
                 if (owned != null && ownedDrops)
                     continue;
                 HomeItem shown = owned ?? group[0];
+                LendMedia(shown, group);
                 listed.Add(shown);
                 var others = group.Where(i => !ReferenceEquals(i, shown) && i.Rom.PlatformId != shown.Rom.PlatformId).ToList();
                 if (others.Count > 0)
@@ -169,24 +118,41 @@ namespace RomM.Store
             {
                 var candidates = new List<HomeItem> { self };
                 candidates.AddRange(known);
-                try
+                // By its name, and by the game's name without the edition ("Peace Walker - Master
+                // Collection Version" finds "Peace Walker" too).
+                var terms = new List<string> { name };
+                string game = global::RomM.Games.SameGame.EditionBase(name);
+                if (!string.Equals(game, name, StringComparison.OrdinalIgnoreCase))
+                    terms.Add(game);
+                foreach (string term in terms)
                 {
-                    foreach (JToken found in Get($"/api/roms?limit=60&search_term={Uri.EscapeDataString(name)}")?["items"] as JArray ?? new JArray())
+                    try
                     {
-                        HomeItem item = ItemFrom(found as JObject, null, null);
-                        if (item != null && candidates.All(c => c.Rom.Id != item.Rom.Id))
-                            candidates.Add(item);
+                        foreach (JToken found in Get($"/api/roms?limit=60&search_term={Uri.EscapeDataString(term)}")?["items"] as JArray ?? new JArray())
+                        {
+                            HomeItem item = ItemFrom(found as JObject, null, null);
+                            if (item != null && candidates.All(c => c.Rom.Id != item.Rom.Id))
+                                candidates.Add(item);
+                        }
                     }
-                }
-                catch (Exception ex)
-                {
-                    s_log.Info($"[Store] Could not look for {name} on other platforms: {ex.Message}");
+                    catch (Exception ex)
+                    {
+                        s_log.Info($"[Store] Could not look for {term} on other platforms: {ex.Message}");
+                    }
                 }
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
                     if (_currentRom == null || _currentRom.Id != rom.Id)
                         return;
                     List<HomeItem> group = GroupVersions(candidates).FirstOrDefault(g => g.Any(i => i.Rom.Id == rom.Id)) ?? new List<HomeItem>();
+                    // Media this version lacks, from another platform's: the page drawn again with
+                    // it (once: lent, it no longer lacks it).
+                    if (LendMedia(self, group))
+                    {
+                        s_log.Info($"[Store] {name}: media it lacks shown from another platform's version.");
+                        RedrawGame(rom);
+                        return;
+                    }
                     // One row per platform (that platform's best copy), this one's platform not again.
                     var rows = group.Where(i => i.Rom.PlatformId != rom.PlatformId)
                         .GroupBy(i => i.Rom.PlatformId).Select(g => g.First())

@@ -431,6 +431,47 @@ namespace RomM
             }
         }
 
+        /// <summary>
+        /// Media the ROM lacks lent from another platform's version of the same game (Games.SameGame),
+        /// found by searching the server for its name and the game's name without the edition.
+        /// For one game added or refreshed alone; a library update lends within what it downloads.
+        /// </summary>
+        public void LendFromOtherVersions(RomMRom rom)
+        {
+            if (rom == null || !SameGame.LacksMedia(rom) || string.IsNullOrWhiteSpace(rom.Name))
+                return;
+            try
+            {
+                var found = new List<RomMRom> { rom };
+                var terms = new List<string> { SameGame.EditionBase(rom.Name) };
+                if (!string.Equals(terms[0], rom.Name, StringComparison.OrdinalIgnoreCase))
+                    terms.Add(rom.Name);
+                foreach (string term in terms)
+                {
+                    string url = CombineUrl(Settings.RomMHost, $"api/roms?limit=60&search_term={Uri.EscapeDataString(term)}");
+                    HttpResponseMessage response = HttpClientSingleton.Instance.GetAsync(url).GetAwaiter().GetResult();
+                    if (!response.IsSuccessStatusCode)
+                        continue;
+                    var page = Newtonsoft.Json.Linq.JObject.Parse(response.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+                    foreach (var item in page["items"] as Newtonsoft.Json.Linq.JArray ?? new Newtonsoft.Json.Linq.JArray())
+                    {
+                        RomMRom other = item.ToObject<RomMRom>();
+                        if (other != null && found.All(r => r.Id != other.Id))
+                            found.Add(other);
+                    }
+                }
+                List<RomMRom> group = SameGame.Group(found.Select(r => SameGame.Of(r)).ToList())
+                    .First(g => g.Contains(0)).Select(i => found[i]).Where(r => r.PlatformId != rom.PlatformId).ToList();
+                RomMRom donor = SameGame.DonorFor(rom, group);
+                if (donor != null && SameGame.Lend(rom, donor))
+                    Logger.Info($"[Versions] {rom.Name}: media it lacks taken from its {donor.PlatformDisplayName ?? donor.PlatformName} version.");
+            }
+            catch (Exception ex)
+            {
+                Logger.Info($"[Versions] Could not look for other versions of {rom.Name}: {ex.Message}");
+            }
+        }
+
         // Playnite url is in the format playnite://romm/<action>/<platform_igdb_id>/<rom_id>
         internal void HandleRommUri(PlayniteUriEventArgs args)
         {

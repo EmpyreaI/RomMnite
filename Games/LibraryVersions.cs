@@ -15,7 +15,8 @@ namespace RomM.Games
     /// reached from the drop-down beside its Play / Install button (GameActionButton).
     ///
     /// The same game: RomM games of this account's library with the same name (letters and
-    /// digits, letter case aside) on different platforms. The shown copy: an installed one if
+    /// digits, letter case aside, an edition's words at its end left out: SameGame.Key) on
+    /// different platforms. The shown copy: an installed one if
     /// any (the best platform among them), else one whose emulator is ready, else the best
     /// platform (PlatformRanks). Re-worked out as the library changes (installs and
     /// uninstalls, games added and removed).
@@ -207,16 +208,9 @@ namespace RomM.Games
             Soon();
         }
 
-        private static string Key(string name)
-        {
-            var key = new StringBuilder();
-            foreach (char c in name ?? "")
-            {
-                if (char.IsLetterOrDigit(c))
-                    key.Append(char.ToLowerInvariant(c));
-            }
-            return key.ToString();
-        }
+        // The game's name without an edition's words (SameGame.Key): "Metal Gear Solid: Peace
+        // Walker - Master Collection Version" is a copy of "Metal Gear Solid: Peace Walker".
+        private static string Key(string name) => SameGame.Key(name);
 
         // Its platform's specification id, or the one its platform's name stands for (platforms
         // made by name have none).

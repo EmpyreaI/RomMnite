@@ -12,7 +12,13 @@ namespace RomM
     /// would get Playnite's copies, of other versions, which .NET refuses ("Could not load file
     /// or assembly 'SharpCompress, Version=0.36.0.0'"). The build also puts every dependency in
     /// lib\ (RomMnite.csproj, CopyDependenciesToLib), which the Toolbox keeps; when .NET cannot find
-    /// a library, it is loaded from there.
+    /// a library, it is loaded from there, else from the extension's own folder.
+    ///
+    /// The extension's folder too: a library loaded from lib\ (SharpCompress) looks for what it
+    /// needs (ZstdSharp) only in lib\, and tools\pack.ps1 keeps one copy of each library, the
+    /// top one where the Toolbox left it there. Without this, SharpCompress could not find
+    /// ZstdSharp ("Could not load file or assembly 'ZstdSharp, Version=0.7.4.0'") and no
+    /// compressed game could be installed.
     /// </summary>
     internal static class PluginDependencies
     {
@@ -34,8 +40,9 @@ namespace RomM
                 string folder = Path.GetDirectoryName(typeof(PluginDependencies).Assembly.Location);
                 if (string.IsNullOrEmpty(folder))
                     return null;
-                string file = Path.Combine(folder, "lib", wanted.Name + ".dll");
-                if (!File.Exists(file))
+                string file = new[] { Path.Combine(folder, "lib", wanted.Name + ".dll"), Path.Combine(folder, wanted.Name + ".dll") }
+                    .FirstOrDefault(File.Exists);
+                if (file == null)
                     return null;
 
                 AssemblyName offered = AssemblyName.GetAssemblyName(file);
