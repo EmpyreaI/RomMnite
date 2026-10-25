@@ -69,6 +69,8 @@ namespace RomM.Store
             int romId = rom.Id;
             int ownIgdb = rom.IgdbId ?? 0;
             string ownName = Wishlist.Normalize(rom.Name);
+            // The game itself under an edition's name ("Cyberpunk 2077 (Collector's Edition)"): not another game of the series.
+            string ownGame = global::RomM.Games.SameGame.Key(rom.Name);
             string platform = Str(data, "platform_display_name") ?? Str(data, "platform_name");
             string seriesKey = Wishlist.Normalize(series);
             var seriesNames = new HashSet<string>(seriesList, StringComparer.OrdinalIgnoreCase);
@@ -153,7 +155,7 @@ namespace RomM.Store
             Func<SeriesGame, bool> addWish = game =>
             {
                 string key = Wishlist.Normalize(game.Name);
-                if (key.Length == 0 || key == ownName || (game.IgdbId > 0 && (game.IgdbId == ownIgdb || serverIgdb.Contains(game.IgdbId) || wishIgdb.ContainsKey(game.IgdbId))))
+                if (key.Length == 0 || key == ownName || global::RomM.Games.SameGame.Key(game.Name) == ownGame || (game.IgdbId > 0 && (game.IgdbId == ownIgdb || serverIgdb.Contains(game.IgdbId) || wishIgdb.ContainsKey(game.IgdbId))))
                     return false;
                 if (placed.ContainsKey(key))
                     return false;
@@ -284,6 +286,9 @@ namespace RomM.Store
             foreach (SeriesGame candidate in toCheck)
                 check(candidate);
 
+            // The wider search (below), started once the server's own list is in.
+            Action search = null;
+
             // The series on the server.
             started();
             Task.Run(() =>
@@ -309,14 +314,23 @@ namespace RomM.Store
                 {
                     foreach (JObject o in members)
                         addServer(o, null);
+                    // The wider search only for a series the server has more than this game of:
+                    // a name search alone cannot tell a series from games that only share a word
+                    // ("Cyberpunk 2077" and every other title with "Cyberpunk" in it).
+                    bool others = members.Any(o => !isOwn(o));
+                    if (!searchedBefore && others)
+                        search();
+                    else if (!searchedBefore)
+                        s_log.Debug($"[Store] {series}: no other game of it on the server; not searched for more.");
                     finished();
                 });
             });
 
             // The rest of the series, from IGDB through the server's metadata search (the one
-            // RomM's "match" dialog uses), kept to titles carrying the series' name, so a loose
+            // RomM's "match" dialog uses), kept to titles named as the series' games are (the
+            // series' name, then nothing, a subtitle, or a number: SeriesTitle), so a loose
             // search does not pull in other games. Once per series and platform a session.
-            if (!searchedBefore)
+            search = () =>
             {
                 started();
                 Task.Run(() =>
@@ -328,7 +342,7 @@ namespace RomM.Store
                         foreach (JToken hit in (found as JArray) ?? (found?["items"] as JArray) ?? new JArray())
                         {
                             string name = Str(hit, "name");
-                            if (string.IsNullOrEmpty(name) || !Wishlist.Normalize(name).Contains(seriesKey))
+                            if (string.IsNullOrEmpty(name) || !seriesList.Any(sn => SeriesTitle(name, sn)))
                                 continue;
                             string cover = Str(hit, "igdb_url_cover") ?? Str(hit, "url_cover") ?? Str(hit, "cover_url")
                                 ?? Str(hit, "ss_url_cover") ?? Str(hit, "moby_url_cover");
@@ -350,8 +364,29 @@ namespace RomM.Store
                         finished();
                     });
                 });
-            }
+            };
         }
+
+        private static readonly System.Text.RegularExpressions.Regex s_sequel = new System.Text.RegularExpressions.Regex(
+            @"^(\s*[:\-–—]|\s+(\d+|[ivxlc]+)\b|\s*$)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        /// <summary>
+        /// Whether a title is named as a game of the series is: the series' name (a leading "The"
+        /// aside), then nothing, a subtitle ("Halo: Reach", "Metal Gear - ..."), or a number
+        /// ("Halo 2", "Final Fantasy VII"). Not a title that only has the word in it ("Hell: A
+        /// Cyberpunk Thriller") or adds a word of its own ("Cyberpunk Girl").
+        /// </summary>
+        internal static bool SeriesTitle(string title, string series)
+        {
+            string t = StripThe((title ?? "").Trim());
+            string sn = StripThe((series ?? "").Trim());
+            if (sn.Length == 0 || !t.StartsWith(sn, StringComparison.OrdinalIgnoreCase))
+                return false;
+            return s_sequel.IsMatch(t.Substring(sn.Length));
+        }
+
+        private static string StripThe(string name) =>
+            name.StartsWith("The ", StringComparison.OrdinalIgnoreCase) ? name.Substring(4) : name;
 
         // A game the server lacks: its cover (darkened), its name in a fixed two-line space so
         // the buttons of a row line up, and the wishlist button, which waits until the server

@@ -155,6 +155,7 @@ namespace RomM.Settings
                 model.AutoPlayVideos,
                 model.OverlayButton,
                 model.OverlayForPcGames,
+                model.BorderlessWindowedGames,
                 model.EmulatorMenusOnStartSelect,
                 model.EmulatorsAtDisplayResolution,
                 model.SunshineEnabled,
@@ -199,6 +200,7 @@ namespace RomM.Settings
                     model.AutoPlayVideos = before.AutoPlayVideos;
                     model.OverlayButton = before.OverlayButton;
                     model.OverlayForPcGames = before.OverlayForPcGames;
+                    model.BorderlessWindowedGames = before.BorderlessWindowedGames;
                     model.EmulatorMenusOnStartSelect = before.EmulatorMenusOnStartSelect;
                     model.EmulatorsAtDisplayResolution = before.EmulatorsAtDisplayResolution;
                     model.SunshineEnabled = before.SunshineEnabled;

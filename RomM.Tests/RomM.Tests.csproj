@@ -46,6 +46,7 @@
     <Compile Include="..\Games\RomMGameInfo.cs" Link="Linked\Games\RomMGameInfo.cs" />
     <Compile Include="..\Games\RomMMetadataMapper.cs" Link="Linked\Games\RomMMetadataMapper.cs" />
     <Compile Include="..\Games\SameGame.cs" Link="Linked\Games\SameGame.cs" />
+    <Compile Include="..\Games\SteamEmuFiles.cs" Link="Linked\Games\SteamEmuFiles.cs" />
     <Compile Include="..\Games\RomMServerVersion.cs" Link="Linked\Games\RomMServerVersion.cs" />
     <Compile Include="..\Games\RomMRomQuery.cs" Link="Linked\Games\RomMRomQuery.cs" />
     <Compile Include="..\Games\RomMUrl.cs" Link="Linked\Games\RomMUrl.cs" />

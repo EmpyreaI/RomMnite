@@ -54,7 +54,7 @@ namespace RomM.Overlay
 
         // XInput's bits (XINPUT_GAMEPAD).
         private const ushort Up = 0x0001, Down = 0x0002, Left = 0x0004, Right = 0x0008, StartButton = 0x0010, Back = 0x0020,
-            L3 = 0x0040, R3 = 0x0080, Guide = 0x0400, A = 0x1000, B = 0x2000;
+            L3 = 0x0040, R3 = 0x0080, LB = 0x0100, RB = 0x0200, Guide = 0x0400, A = 0x1000, B = 0x2000;
 
         private const int Microsoft = 0x045E, Sony = 0x054C, Nintendo = 0x057E;
 
@@ -329,6 +329,8 @@ namespace RomM.Overlay
                     if ((left & 0x02) != 0) s |= Up;
                     if ((left & 0x04) != 0) s |= Right;
                     if ((left & 0x08) != 0) s |= Left;
+                    if ((left & 0x40) != 0) s |= LB;        // L
+                    if ((right & 0x40) != 0) s |= RB;       // R
                     return s;
                 }
                 if (r[0] == 0x3F && length > 3)
@@ -336,6 +338,8 @@ namespace RomM.Overlay
                     byte face = r[1], middle = r[2];
                     if ((face & 0x01) != 0) s |= A;
                     if ((face & 0x02) != 0) s |= B;
+                    if ((face & 0x10) != 0) s |= LB;        // L
+                    if ((face & 0x20) != 0) s |= RB;        // R
                     if ((middle & 0x01) != 0) s |= Back;
                     if ((middle & 0x02) != 0) s |= StartButton;
                     if ((middle & 0x04) != 0) s |= L3;
@@ -352,6 +356,8 @@ namespace RomM.Overlay
                 ushort s = Hat(face & 0x0F);
                 if ((face & 0x20) != 0) s |= A;        // Cross
                 if ((face & 0x40) != 0) s |= B;        // Circle
+                if ((middle & 0x01) != 0) s |= LB;     // L1
+                if ((middle & 0x02) != 0) s |= RB;     // R1
                 if ((middle & 0x10) != 0) s |= Back;   // Share / Create
                 if ((middle & 0x20) != 0) s |= StartButton;  // Options
                 if ((middle & 0x40) != 0) s |= L3;
@@ -403,6 +409,8 @@ namespace RomM.Overlay
                 if (Held("rightstick", pressed, hatBits)) s |= R3;
                 if (Held("a", pressed, hatBits)) s |= A;
                 if (Held("b", pressed, hatBits)) s |= B;
+                if (Held("leftshoulder", pressed, hatBits)) s |= LB;
+                if (Held("rightshoulder", pressed, hatBits)) s |= RB;
                 if (Held("dpup", pressed, hatBits)) s |= Up;
                 if (Held("dpdown", pressed, hatBits)) s |= Down;
                 if (Held("dpleft", pressed, hatBits)) s |= Left;

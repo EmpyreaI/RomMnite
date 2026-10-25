@@ -258,6 +258,9 @@ namespace RomM.Settings
         // (Setup/EmulatorMenus) so the Home button is the overlay's alone.
         public string OverlayButton { get; set; } = "Guide";
         public bool OverlayForPcGames { get; set; } = true;
+        // Windows games in an ordinary window made borderless on their screen (Overlay/BorderlessWindows),
+        // so the overlay can show over them.
+        public bool BorderlessWindowedGames { get; set; } = false;
         public bool EmulatorMenusOnStartSelect { get; set; } = true;
 
         // Emulators render at the display's resolution, where still at their default
@@ -395,6 +398,7 @@ namespace RomM.Settings
                 AutoPlayVideos = savedSettings.AutoPlayVideos;
                 OverlayButton = string.IsNullOrEmpty(savedSettings.OverlayButton) ? "Guide" : savedSettings.OverlayButton;
                 OverlayForPcGames = savedSettings.OverlayForPcGames;
+                BorderlessWindowedGames = savedSettings.BorderlessWindowedGames;
                 EmulatorMenusOnStartSelect = savedSettings.EmulatorMenusOnStartSelect;
                 EmulatorsAtDisplayResolution = savedSettings.EmulatorsAtDisplayResolution;
                 SunshineEnabled = savedSettings.SunshineEnabled;

@@ -16,8 +16,9 @@ namespace RomM.Overlay
     /// The overlay itself (GameOverlay opens it): the game's screen dimmed, a bar along the top
     /// with the game, the clock and the time played (this session, and in all), the game's
     /// achievements in a panel (unlocked first, newest first, then the rest dimmed), and Resume
-    /// and Quit game. Keyboard and mouse work as anywhere; the controller's D-pad moves between
-    /// the buttons, A presses, B closes (GameOverlay reads it). Esc closes too.
+    /// and Quit game. Keyboard and mouse work as anywhere; on the controller the bumpers choose
+    /// the achievements (LB, the D-pad scrolls them) or the buttons (RB, the D-pad moves between
+    /// them), A presses, B closes (GameOverlay reads it). Esc closes too.
     /// </summary>
     internal sealed class OverlayWindow : Window
     {
@@ -43,6 +44,9 @@ namespace RomM.Overlay
         private TextBlock _volumeText;
         private Border _volumeFill;
         private ColumnDefinition _volumeOn, _volumeOff;
+        private ScrollViewer _scroller;
+        private Border _listCard;
+        private bool _inList;   // the controller's D-pad scrolls the achievements
 
         public event Action ResumeRequested;
         public event Action QuitRequested;
@@ -153,15 +157,20 @@ namespace RomM.Overlay
             _achievementSummary = Words("", 20, FontWeights.SemiBold, Brushes.White);
             heading.Children.Add(_achievementSummary);
             achievementsPanel.Children.Add(heading);
-            var scroller = new ScrollViewer
+            _scroller = new ScrollViewer
             {
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
                 Content = _achievements,
-                Focusable = false,
+                Focusable = true,
+                FocusVisualStyle = null,
             };
-            achievementsPanel.Children.Add(scroller);
-            body.Children.Add(Card(achievementsPanel, new Thickness(0)));
+            // Chosen (LB, or clicked into): its edge lit, the buttons' ring off (they lose focus).
+            _scroller.GotKeyboardFocus += (s, e) => MarkList(true);
+            _scroller.LostKeyboardFocus += (s, e) => MarkList(false);
+            achievementsPanel.Children.Add(_scroller);
+            _listCard = Card(achievementsPanel, new Thickness(0));
+            body.Children.Add(_listCard);
 
             var actions = new StackPanel { VerticalAlignment = VerticalAlignment.Bottom };
             if (_audio != null)
@@ -169,7 +178,9 @@ namespace RomM.Overlay
             actions.Children.Add(ActionButton("Resume", Blue, () => ResumeRequested?.Invoke()));
             actions.Children.Add(ActionButton("Quit game", Red, () => QuitRequested?.Invoke()));
             // Only the buttons of what is in use.
-            string how = InputActivity.ControllerInUse ? "D-pad to choose, A to press, B to close." : "Arrow keys or the mouse to choose, Enter to press, Esc to close.";
+            string how = InputActivity.ControllerInUse
+                ? "LB for the achievements, RB for these buttons. D-pad to scroll or choose, A to press, B to close."
+                : "Arrow keys or the mouse to choose, Enter to press, Esc to close.";
             if (_audio != null)
                 how += InputActivity.ControllerInUse ? " Left and right change the game's volume." : " Left and right arrows change the game's volume.";
             if (_keepsRunning)
@@ -276,6 +287,8 @@ namespace RomM.Overlay
         /// </summary>
         public bool Adjust(int step)
         {
+            if (_inList)
+                return true;   // left and right do nothing in the list
             if (_volumeButton == null || !_volumeButton.IsKeyboardFocused)
                 return false;
             Step(step);
@@ -325,9 +338,42 @@ namespace RomM.Overlay
             return template;
         }
 
-        /// <summary>The controller's D-pad: the next or previous button.</summary>
+        /// <summary>
+        /// The controller's bumpers: the achievements (the D-pad scrolls them) or the buttons
+        /// (the D-pad moves between them, the one chosen before chosen again).
+        /// </summary>
+        public void UseList(bool list)
+        {
+            if (list)
+            {
+                _lastButton = _buttons.FirstOrDefault(b => b.IsKeyboardFocused) ?? _lastButton;
+                _scroller?.Focus();
+            }
+            else
+                (_lastButton ?? _buttons.FirstOrDefault(b => b != _volumeButton) ?? _buttons.FirstOrDefault())?.Focus();
+        }
+
+        private Button _lastButton;
+
+        private void MarkList(bool chosen)
+        {
+            _inList = chosen;
+            if (_listCard != null)
+            {
+                _listCard.BorderBrush = chosen ? Blue : Edge;
+                _listCard.BorderThickness = new Thickness(chosen ? 2 : 1);
+            }
+        }
+
+        /// <summary>The controller's D-pad: the next or previous button, or the achievements scrolled.</summary>
         public void Move(int step)
         {
+            if (_inList)
+            {
+                // About one achievement's row at a time.
+                _scroller?.ScrollToVerticalOffset(Math.Max(0, _scroller.VerticalOffset + step * 58));
+                return;
+            }
             if (_buttons.Count == 0)
                 return;
             int at = _buttons.FindIndex(b => b.IsKeyboardFocused);
@@ -338,6 +384,8 @@ namespace RomM.Overlay
         /// <summary>The controller's A: the chosen button.</summary>
         public void Press()
         {
+            if (_inList)
+                return;
             Button chosen = _buttons.FirstOrDefault(b => b.IsKeyboardFocused) ?? _buttons.FirstOrDefault();
             chosen?.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         }
@@ -375,7 +423,7 @@ namespace RomM.Overlay
             _achievements.Children.Add(bar);
 
             IEnumerable<AchievementItem> ordered = set.Items.Where(i => i.Unlocked).OrderByDescending(i => i.When)
-                .Concat(set.Items.Where(i => !i.Unlocked).OrderBy(i => i.Order));
+                .Concat(set.Items.Where(i => !i.Unlocked).OrderBy(i => i.Hidden).ThenBy(i => i.Order));
             foreach (AchievementItem item in ordered)
                 _achievements.Children.Add(Row(item));
         }

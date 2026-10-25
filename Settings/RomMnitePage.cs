@@ -66,6 +66,8 @@ namespace RomM.Settings
             page.Children.Add(buttonRow);
             page.Children.Add(Note("Shift+Tab opens it from the keyboard whichever you choose."));
             page.Children.Add(Check("Show it over Windows games too (they keep running while it's open; Steam games keep Steam's own overlay)", nameof(SettingsViewModel.OverlayForPcGames)));
+            page.Children.Add(Check("Make windowed Windows games borderless", nameof(SettingsViewModel.BorderlessWindowedGames)));
+            page.Children.Add(Note("The overlay can't show over a game in exclusive fullscreen. Set such a game to windowed in its own display settings and this fills the screen with it, without borders, so the overlay works. Best with the game's resolution set to your screen's."));
             page.Children.Add(Check("Open emulators' own menus with Start + Select (DuckStation, PCSX2, RetroArch, PPSSPP), so the Home button is the overlay's alone", nameof(SettingsViewModel.EmulatorMenusOnStartSelect)));
             page.Children.Add(Note("Applied as each game starts, and only where you haven't put the emulator's menu on a controller button yourself. Not while the overlay is on Back + Start, which shares those buttons."));
             page.Children.Add(Check("Render emulated games at your display's resolution (DuckStation, PCSX2, RPCS3, Dolphin, Azahar, Xenia, Vita3K, Flycast, xemu)", nameof(SettingsViewModel.EmulatorsAtDisplayResolution)));

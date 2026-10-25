@@ -46,6 +46,7 @@ namespace RomM.AchievementViews
         private Guid _gameId = Guid.Empty;
         private GameAchievements _data;
         private bool _guarded;
+        private bool _cannotEarn;
 
         public AchievementControl(RomM plugin, AchievementView kind)
         {
@@ -100,6 +101,11 @@ namespace RomM.AchievementViews
             // blurred behind a prompt to sign in; the button and bar are not shown. Sets read
             // from the emulators (trophies, Xbox achievements) need no sign-in.
             _guarded = _data != null && _data.Source == null && !_plugin.RetroAchievements.SignedIn;
+            // A Windows game's copy that cannot earn them: said once above the list (the first view
+            // of each place: the achievements tab's compact list, the overview's unlocked ones),
+            // the list itself shown as usual.
+            _cannotEarn = _data != null && !string.IsNullOrEmpty(_data.Unavailable)
+                && (_kind == AchievementView.CompactList || _kind == AchievementView.CompactUnlocked);
             if (_guarded && (_kind == AchievementView.Button || _kind == AchievementView.ProgressBar))
             {
                 Visibility = Visibility.Collapsed;
@@ -267,6 +273,28 @@ namespace RomM.AchievementViews
             return grid;
         }
 
+        // Why this copy cannot earn its achievements: a line above the list, which stays as it is.
+        private FrameworkElement CannotEarnNotice(string why)
+        {
+            var words = new StackPanel();
+            var title = Text("Achievements unavailable", 13, true);
+            words.Children.Add(title);
+            var line = Text(why, 12);
+            line.Opacity = 0.8;
+            line.Margin = new Thickness(0, 3, 0, 0);
+            words.Children.Add(line);
+            return new Border
+            {
+                Background = new SolidColorBrush(Color.FromArgb(0x66, 0x0B, 0x0E, 0x14)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(0x80, 0xE5, 0xB1, 0x43)),
+                BorderThickness = new Thickness(3, 0, 0, 0),
+                CornerRadius = new CornerRadius(2),
+                Padding = new Thickness(12, 8, 12, 8),
+                Margin = new Thickness(0, 0, 0, 10),
+                Child = words,
+            };
+        }
+
         private FrameworkElement BuildFirstPlay(string gameName, string emulatorName)
         {
             var card = new Border
@@ -302,7 +330,17 @@ namespace RomM.AchievementViews
         {
             try
             {
-                Content = Build();
+                UIElement built = Build();
+                if (_cannotEarn)
+                {
+                    var both = new StackPanel();
+                    both.Children.Add(CannotEarnNotice(_data.Unavailable));
+                    if (built != null)
+                        both.Children.Add(built);
+                    Content = both;
+                }
+                else
+                    Content = built;
             }
             catch (Exception ex)
             {
@@ -316,9 +354,9 @@ namespace RomM.AchievementViews
             {
                 case AchievementView.Button: return BuildButton();
                 case AchievementView.ProgressBar: return BuildProgress();
-                case AchievementView.CompactList: return BuildCompact(_data.Items.OrderByDescending(i => i.Unlocked).ThenByDescending(i => i.When).ThenBy(i => i.Order));
+                case AchievementView.CompactList: return BuildCompact(_data.Items.OrderByDescending(i => i.Unlocked).ThenBy(i => i.Hidden).ThenByDescending(i => i.When).ThenBy(i => i.Order));
                 case AchievementView.CompactUnlocked: return BuildCompact(_data.Items.Where(i => i.Unlocked).OrderByDescending(i => i.When));
-                case AchievementView.CompactLocked: return BuildCompact(_data.Items.Where(i => !i.Unlocked).OrderBy(i => i.Order));
+                case AchievementView.CompactLocked: return BuildCompact(_data.Items.Where(i => !i.Unlocked).OrderBy(i => i.Hidden).ThenBy(i => i.Order));
                 case AchievementView.UserStats: return BuildStats(_data);
                 case AchievementView.List: return BuildList(_data);
                 case AchievementView.Chart: return BuildChart(_data);
@@ -542,7 +580,7 @@ namespace RomM.AchievementViews
         private UIElement BuildList(GameAchievements data)
         {
             var list = new StackPanel();
-            foreach (AchievementItem item in data.Items.OrderByDescending(i => i.Unlocked).ThenByDescending(i => i.When).ThenBy(i => i.Order))
+            foreach (AchievementItem item in data.Items.OrderByDescending(i => i.Unlocked).ThenBy(i => i.Hidden).ThenByDescending(i => i.When).ThenBy(i => i.Order))
             {
                 var row = new Grid { Margin = new Thickness(0, 0, 0, 4) };
                 row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });

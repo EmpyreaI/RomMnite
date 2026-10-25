@@ -47,6 +47,7 @@ namespace RomM.Games
             "definitive edition", "complete edition", "game of the year edition", "goty edition", "goty",
             "enhanced edition", "special edition", "deluxe edition", "ultimate edition", "legendary edition",
             "anniversary edition", "directors cut", "director's cut", "the final cut", "final cut",
+            "collector's edition", "collectors edition", "limited edition", "gold edition", "standard edition",
         };
 
         /// <summary>The name without the edition at its end ("Okami HD" → "Okami"), as given otherwise.</summary>

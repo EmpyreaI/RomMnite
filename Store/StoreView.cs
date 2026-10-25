@@ -2693,6 +2693,7 @@ namespace RomM.Store
         {
             // The scores are with the game's facts at the top (ReviewRow).
             AddAchievements(column, data);
+            AddSteamAchievements(column, rom);
 
             // Time to beat.
             var times = new List<UIElement>();
@@ -3223,14 +3224,40 @@ namespace RomM.Store
             double points = 0;
             foreach (JToken a in achievements)
                 points += Number(a, "points") ?? 0;
+            var badges = new List<Badge>();
+            foreach (JToken a in achievements.OrderBy(t => Number(t, "display_order") ?? 0))
+            {
+                // The server's copy of the badge, else RetroAchievements' own. RomM hands the
+                // path out already under its resources mount ("/assets/romm/resources/roms/...").
+                string path = Str(a, "badge_path");
+                badges.Add(new Badge
+                {
+                    Url = string.IsNullOrEmpty(path) ? null
+                        : Url(path.StartsWith("/assets/") || path.StartsWith("assets/") ? path : "/assets/romm/resources/" + path.TrimStart('/')),
+                    Fallback = Str(a, "badge_url"),
+                    Tip = $"{Str(a, "title")}\n{Str(a, "description")}\n{Number(a, "points") ?? 0:0} points",
+                });
+            }
+            AddBadgeBox(column, "RETROACHIEVEMENTS", $"{achievements.Count} achievements  \u00B7  {points:0} points", badges);
+        }
 
+        // An achievement's picture in a box, and what pointing at it says.
+        private sealed class Badge
+        {
+            public string Url;
+            public string Fallback;
+            public string Tip;
+        }
+
+        // A box of achievements: a line, the first few badges and a tile to see them all.
+        private void AddBadgeBox(Panel column, string heading, string countLine, List<Badge> all)
+        {
             const double size = 64;
             const int few = 4;
-            var ordered = achievements.OrderBy(t => Number(t, "display_order") ?? 0).ToList();
             var badges = new WrapPanel();
             bool expanded = false;
 
-            var count = Text($"{achievements.Count} achievements  \u00B7  {points:0} points", 12, false);
+            var count = Text(countLine, 12, false);
             count.Opacity = 0.7;
             count.Margin = new Thickness(0, 0, 0, 8);
 
@@ -3238,30 +3265,24 @@ namespace RomM.Store
             fill = () =>
             {
                 badges.Children.Clear();
-                IEnumerable<JToken> shown = expanded ? ordered : ordered.Take(few);
-                foreach (JToken a in shown)
+                foreach (Badge a in expanded ? all : all.Take(few))
                 {
-                    // The server's copy of the badge, else RetroAchievements' own. RomM hands the
-                    // path out already under its resources mount ("/assets/romm/resources/roms/...").
-                    string path = Str(a, "badge_path");
-                    string own = string.IsNullOrEmpty(path) ? null
-                        : Url(path.StartsWith("/assets/") || path.StartsWith("assets/") ? path : "/assets/romm/resources/" + path.TrimStart('/'));
-                    var badge = new Image { Width = size, Height = size, Stretch = Stretch.UniformToFill };
-                    RenderOptions.SetBitmapScalingMode(badge, BitmapScalingMode.Fant);
-                    ShowPicture(badge, own, 128, null, Str(a, "badge_url"));
+                    var picture = new Image { Width = size, Height = size, Stretch = Stretch.UniformToFill };
+                    RenderOptions.SetBitmapScalingMode(picture, BitmapScalingMode.Fant);
+                    ShowPicture(picture, a.Url, 128, null, a.Fallback);
                     badges.Children.Add(new Border
                     {
                         Background = new SolidColorBrush(Color.FromArgb(0x40, 0, 0, 0)),
                         Margin = new Thickness(0, 0, 6, 6),
-                        Child = badge,
-                        ToolTip = $"{Str(a, "title")}\n{Str(a, "description")}\n{Number(a, "points") ?? 0:0} points",
+                        Child = picture,
+                        ToolTip = a.Tip,
                     });
                 }
 
                 // "View all 47", or "Show fewer" once open.
-                if (ordered.Count > few)
+                if (all.Count > few)
                 {
-                    var label = Text(expanded ? "Show\nfewer" : $"View all\n{ordered.Count}", 13, false);
+                    var label = Text(expanded ? "Show\nfewer" : $"View all\n{all.Count}", 13, false);
                     label.TextAlignment = TextAlignment.Center;
                     label.HorizontalAlignment = HorizontalAlignment.Center;
                     label.VerticalAlignment = VerticalAlignment.Center;
@@ -3288,10 +3309,54 @@ namespace RomM.Store
                 }
             };
             fill();
-
-            var rows = new List<UIElement> { count, badges };
-            AddBox(column, "RETROACHIEVEMENTS", rows);
+            AddBox(column, heading, new List<UIElement> { count, badges });
         }
+
+        /// <summary>
+        /// Steam's achievements for a Windows game RomM matched on Steam, boxed as RetroAchievements'
+        /// are: the count, the first few badges (with how many players have each, as Steam says)
+        /// and a tile to see them all. Filled in once Steam's list is here (fetched once a month,
+        /// EmulatorAchievements.SteamListFor); nothing when the game has none on Steam.
+        /// </summary>
+        private void AddSteamAchievements(Panel column, RomMRom rom)
+        {
+            int appId = rom?.SteamId ?? 0;
+            if (appId <= 0 || _plugin.EmulatorAchievements == null)
+                return;
+            var host = new StackPanel();
+            column.Children.Add(host);
+            Task.Run(() =>
+            {
+                List<global::RomM.Games.SteamEmuFiles.Entry> list = null;
+                try
+                {
+                    list = _plugin.EmulatorAchievements.SteamListFor(appId);
+                }
+                catch (Exception ex)
+                {
+                    s_log.Info($"[Store] Could not get Steam's achievements of app {appId}: {ex.Message}");
+                }
+                if (list == null || list.Count == 0)
+                    return;
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (_currentRom == null || _currentRom.Id != rom.Id)
+                        return;
+                    // Hidden ones last, as everywhere achievements are listed.
+                    var badges = list.OrderBy(a => a.Hidden).ThenBy(a => a.Order).Select(a => new Badge
+                    {
+                        Url = global::RomM.Games.EmulatorAchievements.SteamIconUrl(appId, a.Icon),
+                        Tip = a.Hidden && string.IsNullOrEmpty(a.Description)
+                            ? $"{a.Title}\nHidden achievement" + Rarity(a)
+                            : $"{a.Title}\n{a.Description}" + Rarity(a),
+                    }).ToList();
+                    AddBadgeBox(host, "STEAM ACHIEVEMENTS", $"{list.Count} achievements", badges);
+                }));
+            });
+        }
+
+        private static string Rarity(global::RomM.Games.SteamEmuFiles.Entry entry) =>
+            entry.Percent.HasValue ? $"\n{entry.Percent.Value:0.#}% of players have this" : "";
 
         // Other copies of the same game on the server (regions, revisions, hacks).
         private void AddVersions(Panel column, JObject data, int romId)

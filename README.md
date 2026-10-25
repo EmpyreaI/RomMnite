@@ -19,7 +19,7 @@ RomMnite turns [Playnite](https://playnite.link) into a Steam-like home for your
 - **Store**: browse the whole server like a storefront: Home with featured games, Platforms, Genres and Series pages, search, and game pages with screenshots, videos, reviews, compatibility notes and the other versions of each game.
 - **Emulators set up for you**: downloaded and configured on first use, provided the appropriate files are on your server.
 - **Cloud saves**: synced with RomM before and after each session, while playing, and for every installed game at start-up. Windows games' saves go through [Ludusavi](https://github.com/mtkennerly/ludusavi), downloaded when needed. Progress made offline is kept and uploaded once RomM is back; when both sides changed, the save that loses is kept as a backup.
-- **Achievements**: RetroAchievements through RomM, plus PS3 trophies (RPCS3) and Xbox 360 achievements (Xenia) with cloud sync.
+- **Achievements**: RetroAchievements through RomM, plus PS3 trophies (RPCS3), Xbox 360 achievements (Xenia) and Windows games' achievements from Steam emulators' files (gbe_fork, Goldberg, CODEX and others), with cloud sync. Windows games matched on Steam show their achievement list even before they're installed.
 - **In-game overlay**: the Home button opens play time, achievements and Resume / Quit over emulated games, and over Windows games.
 - **Accounts**: several RomM accounts on one PC, each with its own library, saves and achievements.
 

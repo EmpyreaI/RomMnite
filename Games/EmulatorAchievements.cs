@@ -31,12 +31,15 @@ namespace RomM.Games
     /// Where a game's set is, is learned from what the emulator wrote during a session (and, for
     /// Xenia, from the save folders learned for the game).
     ///
+    /// Windows games too, whose copy keeps its achievements through a Steam emulator in place of
+    /// Steam: read from the emulator's files (EmulatorAchievements.SteamEmu, SteamEmuFiles).
+    ///
     ///   RPCS3   dev_hdd0\home\&lt;user&gt;\trophy\&lt;NPWR...&gt;\ TROPCONF.SFM (the list), TROPUSR.DAT
     ///           (unlocks and times), TROP###.PNG (icons)
     ///   Xenia   content\&lt;xuid&gt;\FFFE07D1\00010000\&lt;xuid&gt;\&lt;title id&gt;.gpd (an XDBF file: the
     ///           achievements, their images, unlock flags and times)
     /// </summary>
-    public sealed class EmulatorAchievements
+    public sealed partial class EmulatorAchievements
     {
         private static readonly ILogger s_log = LogManager.GetLogger();
         public const string NoteTitle = "Playnite Achievements";
@@ -77,7 +80,9 @@ namespace RomM.Games
         private sealed class Source
         {
             public string Kind { get; set; }
-            public string Path { get; set; }      // RPCS3: the trophy folder; Xenia: the .gpd file
+            public string Path { get; set; }      // RPCS3: the trophy folder; Xenia: the .gpd file; a Steam emulator's: its file (last found)
+            public int AppId { get; set; }        // a Steam emulator's: the game's Steam app id
+            public string DllFolder { get; set; } // a Steam emulator's: the folder of its steam_api dll
         }
 
         private readonly RomM _plugin;
@@ -116,6 +121,8 @@ namespace RomM.Games
             installDir = null;
             if (game == null || game.PluginId != _plugin.Id)
                 return null;
+            if (Overlay.GameOverlay.IsPc(game))
+                return SteamEmuGame(game, out installDir) ? SteamEmu : null;
             Saves.SaveEmulatorResolution resolution = _plugin.SaveSync.EmulatorFor(game);
             emulator = resolution?.Emulator;
             if (emulator == null)
@@ -141,7 +148,7 @@ namespace RomM.Games
             try
             {
                 string kind = KindOf(game, out Emulator emulator, out string installDir);
-                if (kind == null || _accountFolder == null)
+                if (kind == null || kind == SteamEmu || _accountFolder == null)
                     return false;
                 emulatorName = kind == "rpcs3" ? "RPCS3" : "Xenia";
                 Record record = LoadRecord(_accountFolder, game.Id);
@@ -263,8 +270,9 @@ namespace RomM.Games
             public DateTime Started;
             public FileSystemWatcher Watcher;
             public System.Threading.Timer Settle;
-            public readonly HashSet<string> Seen = new HashSet<string>();
+            public readonly HashSet<string> Seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             public readonly object Lock = new object();
+            public bool Primed;   // a Steam emulator's: its unlocks before the session noted
         }
 
         private readonly ConcurrentDictionary<Guid, LiveWatch> _live = new ConcurrentDictionary<Guid, LiveWatch>();
@@ -279,11 +287,13 @@ namespace RomM.Games
                 string kind = KindOf(game, out Emulator _, out string installDir);
                 if (kind == null)
                     return;
-                string root = kind == "rpcs3" ? Rpcs3TrophyRoot(installDir) : XeniaGpdFolder(installDir);
-                if (root == null || !Directory.Exists(root))
+                string root = kind == SteamEmu ? null : kind == "rpcs3" ? Rpcs3TrophyRoot(installDir) : XeniaGpdFolder(installDir);
+                if (kind != SteamEmu && (root == null || !Directory.Exists(root)))
                     return;
                 var watch = new LiveWatch { Game = game, Kind = kind, InstallDir = installDir, Started = started };
-                Source known = Known(game, kind, installDir);
+                // A Steam emulator's: what is unlocked already is noted at the first look (CheckLive),
+                // off this thread (finding its files means looking through the game's folder).
+                Source known = kind == SteamEmu ? null : Known(game, kind, installDir);
                 EmulatorSet now = known != null && (File.Exists(known.Path) || Directory.Exists(known.Path)) ? Read(known) : null;
                 foreach (string id in now?.Unlocked.Keys ?? Enumerable.Empty<string>())
                     watch.Seen.Add(id);
@@ -293,6 +303,14 @@ namespace RomM.Games
                         watch.Seen.Add(id);
                 }
                 watch.Settle = new System.Threading.Timer(_ => CheckLive(watch), null, System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+                if (kind == SteamEmu)
+                {
+                    // The emulator's file may be in any of several folders, and made only at the
+                    // first unlock: looked at every few seconds rather than watched.
+                    watch.Settle.Change(4000, 4000);
+                    _live[game.Id] = watch;
+                    return;
+                }
                 watch.Watcher = new FileSystemWatcher(root)
                 {
                     Filter = kind == "rpcs3" ? "TROPUSR.DAT" : "*.gpd",
@@ -319,8 +337,11 @@ namespace RomM.Games
                 return;
             try
             {
-                watch.Watcher.EnableRaisingEvents = false;
-                watch.Watcher.Dispose();
+                if (watch.Watcher != null)
+                {
+                    watch.Watcher.EnableRaisingEvents = false;
+                    watch.Watcher.Dispose();
+                }
                 watch.Settle.Dispose();
             }
             catch
@@ -339,6 +360,19 @@ namespace RomM.Games
                     EmulatorSet set = source == null ? null : Read(source);
                     if (set == null)
                         return;
+                    if (!watch.Primed)
+                    {
+                        watch.Primed = true;
+                        if (watch.Kind == SteamEmu)
+                        {
+                            // Unlocked before the session (or with no time to tell): not announced.
+                            foreach (KeyValuePair<string, DateTime?> before in set.Unlocked)
+                            {
+                                if (!before.Value.HasValue || before.Value.Value < watch.Started - Slack)
+                                    watch.Seen.Add(before.Key);
+                            }
+                        }
+                    }
                     string icons = Path.Combine(_iconsFolder, set.Kind + "_" + set.SetId);
                     foreach (KeyValuePair<string, DateTime?> unlock in set.Unlocked)
                     {
@@ -350,7 +384,7 @@ namespace RomM.Games
                         Definition definition = set.Definitions.FirstOrDefault(d => d.Id == unlock.Key);
                         if (definition == null)
                             continue;
-                        string icon = Path.Combine(icons, definition.Id + ".png");
+                        string icon = IconFile(icons, set.Kind, definition.Id);
                         UnlockedLive?.Invoke(watch.Game, new AchievementItem
                         {
                             Title = definition.Title,
@@ -462,6 +496,9 @@ namespace RomM.Games
                         Show(game, record);
                     if (!notePull)
                         return;
+                    // A Windows game without a Steam emulator here and nothing kept: nothing to sync.
+                    if (record == null && kind == SteamEmu)
+                        return;
                     Record merged = SyncNote(game, record, account);
                     if (merged != null && account == _accountFolder)
                         Show(game, merged);
@@ -482,9 +519,22 @@ namespace RomM.Games
         private Record ReadLocal(Game game, string kind, string account, Record record)
         {
             KindOf(game, out Emulator _, out string installDir);
-            bool own = _plugin.EmulatorUsers.IsActiveFor(game);
+            // A Steam emulator keeps one record for the computer: everything in it is the
+            // account's when it is the only one here.
+            bool own = kind == SteamEmu ? _plugin.Libraries.KnownAccounts <= 1 : _plugin.EmulatorUsers.IsActiveFor(game);
 
-            Source source = Known(game, kind, installDir);
+            // A Windows game: its emulator's files where it has one; else Steam's list alone (and,
+            // installed, said to be unable to earn them: its copy was looked through and has none).
+            Source source;
+            if (kind == SteamEmu)
+            {
+                source = LearnSteamEmu(game, installDir);
+                bool cannot = source == null && !string.IsNullOrEmpty(installDir) && Directory.Exists(installDir);
+                _cannotEarnHere[game.Id] = cannot;
+                source = source ?? SteamListSource(game);
+            }
+            else
+                source = Known(game, kind, installDir);
             string trp = null;
             string setId = null;
             if (kind == "rpcs3")
@@ -502,7 +552,7 @@ namespace RomM.Games
                 }
             }
 
-            EmulatorSet set = source != null && (File.Exists(source.Path) || Directory.Exists(source.Path)) ? Read(source) : null;
+            EmulatorSet set = source != null && (source.Kind == SteamEmu || File.Exists(source.Path) || Directory.Exists(source.Path)) ? Read(source) : null;
             if (set == null && trp != null)
                 set = ReadTrophyPackage(trp, setId);
             if (set == null)
@@ -542,8 +592,8 @@ namespace RomM.Games
             Source known;
             lock (_lock)
                 known = Sources.TryGetValue(game.Id, out Source kept) && kept.Kind == kind ? kept : null;
-            if (known == null)
-                return null;
+            if (known == null || kind == SteamEmu)
+                return known;
             string root = kind == "rpcs3" ? Rpcs3TrophyRoot(installDir) : XeniaGpdFolder(installDir);
             return root == null ? known : new Source { Kind = kind, Path = Path.Combine(root, Path.GetFileName(known.Path.TrimEnd('\\', '/'))) };
         }
@@ -560,13 +610,15 @@ namespace RomM.Games
             {
                 bool unlocked = record.Unlocked.TryGetValue(definition.Id, out DateTime when);
                 bool hidden = definition.Hidden && !unlocked;
-                string icon = Path.Combine(icons, definition.Id + ".png");
+                string icon = IconFile(icons, record.Kind, definition.Id);
+                string gray = IconFile(icons, record.Kind, definition.Id, gray: true);
                 items.Add(new AchievementItem
                 {
                     Title = hidden ? (trophies ? "Hidden trophy" : "Secret achievement") : definition.Title,
                     Description = hidden ? "Keep playing to reveal it." : unlocked ? definition.Description : (definition.LockedDescription ?? definition.Description),
                     Points = definition.Points,
                     BadgeUrl = !hidden && File.Exists(icon) ? icon : null,
+                    BadgeLockedUrl = !hidden && File.Exists(gray) ? gray : null,
                     UnlockedUtc = unlocked ? when : (DateTime?)null,
                     Order = definition.Order,
                     Hidden = hidden,
@@ -577,6 +629,8 @@ namespace RomM.Games
                 Source = record.Kind,
                 UpdatedUtc = DateTime.UtcNow,
                 Items = items,
+                Unavailable = record.Kind == SteamEmu && _cannotEarnHere.TryGetValue(game.Id, out bool cannot) && cannot
+                    ? CannotEarnHere(game.Name) : null,
             });
         }
 
@@ -669,6 +723,10 @@ namespace RomM.Games
                 bool localLacks = local == null || merged.Unlocked.Count > local.Unlocked.Count || (local.Definitions.Count == 0 && merged.Definitions.Count > 0);
                 bool remoteLacks = remote == null || merged.Unlocked.Count > remote.Unlocked.Count || (remote.Definitions.Count == 0 && merged.Definitions.Count > 0);
 
+                // A record with nothing unlocked is not written to the server (a Windows game's
+                // Steam list, looked at, would otherwise leave a note on every game).
+                if (merged.Unlocked.Count == 0)
+                    remoteLacks = false;
                 if (remoteLacks)
                 {
                     var body = new JObject { ["title"] = NoteTitle, ["content"] = JsonConvert.SerializeObject(merged), ["is_public"] = false };
@@ -784,6 +842,8 @@ namespace RomM.Games
         // The game's set: the one the session wrote (learned), or the one learned before.
         private Source Learn(Game game, string kind, string installDir, DateTime started)
         {
+            if (kind == SteamEmu)
+                return LearnSteamEmu(game, installDir);
             DateTime since = started - TimeSpan.FromSeconds(5);
             Source found = null;
             if (kind == "rpcs3")
@@ -930,6 +990,8 @@ namespace RomM.Games
 
         private EmulatorSet Read(Source source)
         {
+            if (source.Kind == SteamEmu)
+                return ReadSteamEmu(source);
             return source.Kind == "rpcs3" ? ReadRpcs3(source.Path) : ReadXenia(source.Path);
         }
 

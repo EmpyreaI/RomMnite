@@ -57,6 +57,10 @@ namespace RomM.Overlay
         private string _processFolder;
         private DateTime _startedUtc;
         private Thread _poller;
+        private BorderlessWindows _borderless;
+        // A Windows game Windows calls exclusive fullscreen: found to really be (opening the
+        // overlay minimised it), or found not to be (the overlay showed over it). Unknown: tried.
+        private bool? _trulyExclusive;
         private volatile bool _running;
         private OverlayWindow _window;
         private bool _suspended;
@@ -86,7 +90,10 @@ namespace RomM.Overlay
                 return;
             bool pc = IsPc(game);
             if (pc && (_plugin.Settings?.OverlayForPcGames == false || game.PluginId == SteamLibrary))
+            {
+                s_log.Info($"[Overlay] Not over {game.Name}: " + (game.PluginId == SteamLibrary ? "a Steam game (Steam's own overlay)." : "the overlay is off for Windows games."));
                 return;
+            }
             // An emulator is always Playnite's process; a Windows game may be started through a
             // launcher, so it is found by its folder instead.
             if (!pc && processId <= 0)
@@ -132,6 +139,19 @@ namespace RomM.Overlay
             HidPads.Begin();
             // Its volume as last set for it (else full), on its sound as it starts.
             _audio.Start(game.Id, IsGameProcess);
+            // A Windows game in an ordinary window made borderless, when chosen in the settings.
+            // Not one that resisted it before (it sizes its own window): left alone.
+            if (pc && _plugin.Settings?.BorderlessWindowedGames == true)
+            {
+                string data = _plugin.GetPluginUserDataPath();
+                if (BorderlessWindows.Resisted(game.Id, data))
+                    s_log.Info($"[Overlay] {game.Name}: not made borderless (it resisted before; tried again in a few months).");
+                else
+                {
+                    _borderless = new BorderlessWindows(IsGameProcess, game.Id, game.Name, data);
+                    _borderless.Start();
+                }
+            }
             _poller = new Thread(Poll) { IsBackground = true, Name = "RomM overlay" };
             _poller.Start();
             HookKeyboard();
@@ -145,8 +165,9 @@ namespace RomM.Overlay
                 hint.Stop();
                 if (_game == null || _game.Id != hinted)
                     return;
-                // A Windows game in exclusive fullscreen: it can't be opened, so that, not how.
-                if (_isPc && GameInFront() && InExclusiveFullscreen())
+                // A Windows game known to be in true exclusive fullscreen: it can't be opened, so
+                // that, not how. (One Windows only calls exclusive is tried at the first press.)
+                if (_isPc && _trulyExclusive == true && GameInFront() && InExclusiveFullscreen())
                 {
                     ShowFullscreenNote();
                     return;
@@ -259,6 +280,9 @@ namespace RomM.Overlay
         public void Stop()
         {
             _running = false;
+            _borderless?.Stop();
+            _borderless = null;
+            _trulyExclusive = null;
             HidPads.End();
             _audio.Stop();
             UnhookKeyboard();
@@ -314,13 +338,21 @@ namespace RomM.Overlay
         {
             if (_game == null || _window != null)
                 return;
-            // Taking the focus from a Windows game in exclusive fullscreen would minimise it:
-            // the pop-up, which does not take the focus, says why nothing opens.
+            // A Windows game Windows calls exclusive fullscreen. Many "fullscreen" games on
+            // Windows 10 and 11 are not truly (Windows runs them borderless underneath, and a
+            // window shows over them), so the first press tries: if the game is minimised by it,
+            // it is truly exclusive (put back, and said so from then on); if not, the overlay
+            // simply works. Known to be truly exclusive: the pop-up, which takes no focus, at once.
+            bool probing = false;
             if (_isPc && GameInFront() && InExclusiveFullscreen())
             {
-                s_log.Info($"[Overlay] {_game.Name} is in exclusive fullscreen; the overlay stays closed.");
-                ShowFullscreenNote();
-                return;
+                if (_trulyExclusive == true)
+                {
+                    s_log.Info($"[Overlay] {_game.Name} is in exclusive fullscreen; the overlay stays closed.");
+                    ShowFullscreenNote();
+                    return;
+                }
+                probing = _trulyExclusive == null;
             }
             try
             {
@@ -340,12 +372,18 @@ namespace RomM.Overlay
                 {
                     _window = null;
                     Resume();
-                    // Back to the game.
+                    // Back to the game (put back first, if taking the focus minimised it).
                     if (gameWindow != IntPtr.Zero)
+                    {
+                        if (IsIconic(gameWindow))
+                            ShowWindow(gameWindow, SW_RESTORE);
                         SetForegroundWindow(gameWindow);
+                    }
                 };
                 _window.Show();
                 _window.Activate();
+                if (probing)
+                    CheckExclusive(gameWindow);
             }
             catch (Exception ex)
             {
@@ -355,10 +393,37 @@ namespace RomM.Overlay
             }
         }
 
+        // Shortly after the overlay opened over a game Windows calls exclusive fullscreen: was the
+        // game minimised by it (truly exclusive: closed again, the game put back, and the pop-up)?
+        private void CheckExclusive(IntPtr gameWindow)
+        {
+            var wait = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
+            wait.Tick += (s, e) =>
+            {
+                wait.Stop();
+                if (_game == null)
+                    return;
+                bool minimised = gameWindow != IntPtr.Zero && IsIconic(gameWindow);
+                _trulyExclusive = minimised;
+                s_log.Info(minimised
+                    ? $"[Overlay] {_game.Name} is in true exclusive fullscreen (opening the overlay minimised it); it stays closed over it."
+                    : $"[Overlay] {_game.Name} is fullscreen but not exclusive; the overlay shows over it.");
+                if (!minimised)
+                    return;
+                CloseWindow();   // puts the game back
+                ShowFullscreenNote();
+            };
+            wait.Start();
+        }
+
+        // Short: a pop-up. Where to go, by what the settings already have.
         private void ShowFullscreenNote()
         {
+            bool helper = _plugin.Settings?.BorderlessWindowedGames == true;
             Toast.Show("Overlay unavailable",
-                "The overlay can't be opened while this game is in fullscreen. Set it to borderless or windowed in its display settings to use the overlay.",
+                helper
+                    ? "Set this game to windowed in its display settings to use the overlay."
+                    : "Set this game to windowed, then turn on Settings > RomMnite > Make windowed Windows games borderless.",
                 glyph: "\uE7BA",
                 screenOf: GetForegroundWindow());
         }
@@ -561,7 +626,8 @@ namespace RomM.Overlay
         private static extern uint XInputGetState(uint index, out XInputState state);
 
         private const ushort DPadUp = 0x0001, DPadDown = 0x0002, DPadLeft = 0x0004, DPadRight = 0x0008;
-        private const ushort PadStart = 0x0010, PadBack = 0x0020, PadL3 = 0x0040, PadR3 = 0x0080, PadGuide = 0x0400, PadA = 0x1000, PadB = 0x2000;
+        private const ushort PadStart = 0x0010, PadBack = 0x0020, PadL3 = 0x0040, PadR3 = 0x0080, PadLB = 0x0100, PadRB = 0x0200,
+            PadGuide = 0x0400, PadA = 0x1000, PadB = 0x2000;
 
         private void Poll()
         {
@@ -660,7 +726,10 @@ namespace RomM.Overlay
             }
             if (_window == null)
                 return;
-            // In the overlay: the D-pad moves between its buttons, A presses, B closes.
+            // In the overlay: the bumpers choose the achievements (LB) or the buttons (RB); the
+            // D-pad scrolls the one or moves between the other, A presses, B closes.
+            if ((pressed & PadLB) != 0) Ui(() => _window?.UseList(true));
+            if ((pressed & PadRB) != 0) Ui(() => _window?.UseList(false));
             if ((pressed & DPadUp) != 0) Ui(() => _window?.Move(-1));
             if ((pressed & DPadDown) != 0) Ui(() => _window?.Move(1));
             // Left and right turn the game's volume when it is chosen, else move like up and down.
@@ -788,6 +857,14 @@ namespace RomM.Overlay
 
         [DllImport("user32.dll")]
         private static extern bool SetForegroundWindow(IntPtr window);
+
+        [DllImport("user32.dll")]
+        private static extern bool IsIconic(IntPtr window);
+
+        [DllImport("user32.dll")]
+        private static extern bool ShowWindow(IntPtr window, int command);
+
+        private const int SW_RESTORE = 9;
 
         [DllImport("user32.dll")]
         private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);

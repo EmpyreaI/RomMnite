@@ -22,6 +22,7 @@ namespace RomM.Tests
         [InlineData("Final Fantasy VII Remake", "Final Fantasy VII Remake")]
         [InlineData("Halo: The Master Chief Collection", "Halo: The Master Chief Collection")]
         [InlineData("HD", "HD")]
+        [InlineData("Cyberpunk 2077 (Collector's Edition)", "Cyberpunk 2077")]
         public void Edition_words_are_taken_off_the_end(string name, string game)
         {
             Assert.Equal(game, SameGame.EditionBase(name));

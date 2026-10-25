@@ -39,6 +39,12 @@ namespace RomM.AchievementViews
         public DateTime UpdatedUtc { get; set; }
         public List<AchievementItem> Items { get; set; } = new List<AchievementItem>();
 
+        /// <summary>
+        /// Why the set cannot be earned on this computer (an installed Windows game whose copy
+        /// keeps no achievements RomMnite can read), said over it; null when it can.
+        /// </summary>
+        public string Unavailable { get; set; }
+
         [JsonIgnore] public int Total => Items.Count;
         [JsonIgnore] public int Unlocked => Items.Count(i => i.Unlocked);
         [JsonIgnore] public int Points => Items.Sum(i => i.Points);
