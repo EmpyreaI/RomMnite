@@ -1,5 +1,11 @@
 AddonId: RomMnite_9700aa21-447d-41b4-a989-acd38f407d9f
 Packages:
+  - Version: 1.0.4
+    RequiredApiVersion: 6.18.0
+    ReleaseDate: 2026-10-25
+    PackageUrl: https://github.com/EmpyreaI/RomMnite/releases/download/1.0.4/RomMnite_9700aa21-447d-41b4-a989-acd38f407d9f_1_0_4.pext
+    Changelog:
+      - 'See the release notes: https://github.com/EmpyreaI/RomMnite/releases/tag/1.0.4'
   - Version: 1.0.3
     RequiredApiVersion: 6.18.0
     ReleaseDate: 2026-10-24
