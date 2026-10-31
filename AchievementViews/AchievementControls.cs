@@ -410,7 +410,7 @@ namespace RomM.AchievementViews
             string picture = item.Unlocked ? item.BadgeUrl : (item.BadgeLockedUrl ?? item.BadgeUrl);
             if (item.Hidden || string.IsNullOrEmpty(picture))
             {
-                return new Border
+                var drawn = new Border
                 {
                     Width = size,
                     Height = size,
@@ -418,6 +418,9 @@ namespace RomM.AchievementViews
                     Child = DrawnBadge(item.Hidden && !item.Unlocked, item.Unlocked, size),
                     ToolTip = Tip(item),
                 };
+                if (item.Rare)
+                    RareGlow.Apply(drawn, item.Unlocked);
+                return drawn;
             }
 
             var image = new Image { Width = size, Height = size, Stretch = Stretch.UniformToFill };
@@ -427,7 +430,7 @@ namespace RomM.AchievementViews
             if (!item.Unlocked && string.IsNullOrEmpty(item.BadgeLockedUrl))
                 image.Opacity = 0.35;
 
-            return new Border
+            var frame = new Border
             {
                 Width = size,
                 Height = size,
@@ -435,6 +438,21 @@ namespace RomM.AchievementViews
                 Child = image,
                 ToolTip = Tip(item),
             };
+            // A rare one: a glowing gold edge (RareGlow).
+            if (item.Rare)
+                RareGlow.Apply(frame, item.Unlocked);
+            return frame;
+        }
+
+        // What an achievement is worth, as its set counts it: points where it has them (none for
+        // Steam's, which have no points), else how many players have it, as Steam shows it.
+        private static string Worth(AchievementItem item)
+        {
+            if (item.Points > 0)
+                return $"{item.Points} points \u00B7 ";
+            if (item.Rarity.HasValue)
+                return $"{item.Rarity.Value:0.#}% of players \u00B7 ";
+            return "";
         }
 
         private static string Tip(AchievementItem item)
@@ -442,7 +460,7 @@ namespace RomM.AchievementViews
             string state = item.Unlocked
                 ? "Unlocked " + item.When.Value.ToLocalTime().ToString("d MMM yyyy", CultureInfo.CurrentCulture) + (item.UnlockedHardcoreUtc.HasValue ? " (hardcore)" : "")
                 : "Locked";
-            return $"{item.Title}\n{item.Description}\n{item.Points} points \u00B7 {state}";
+            return $"{item.Title}\n{item.Description}\n{Worth(item)}{state}";
         }
 
         private static string Percent(GameAchievements data) =>
@@ -565,7 +583,15 @@ namespace RomM.AchievementViews
 
             stat("Unlocked", $"{data.Unlocked} / {data.Total}");
             stat("Completion", Percent(data));
-            stat("Points", $"{data.PointsUnlocked} / {data.Points}");
+            if (data.Points > 0)
+                stat("Points", $"{data.PointsUnlocked} / {data.Points}");
+            else
+            {
+                // No points (Steam's): the rarest one unlocked, as Steam's own stats show it.
+                AchievementItem rarest = data.Items.Where(i => i.Unlocked && i.Rarity.HasValue).OrderBy(i => i.Rarity.Value).FirstOrDefault();
+                if (rarest != null)
+                    stat("Rarest unlocked", $"{rarest.Rarity.Value:0.#}%");
+            }
             int hardcore = data.Items.Count(i => i.UnlockedHardcoreUtc.HasValue);
             if (hardcore > 0)
                 stat("Hardcore", hardcore.ToString(CultureInfo.InvariantCulture));
@@ -600,7 +626,9 @@ namespace RomM.AchievementViews
                 row.Children.Add(words);
 
                 var side = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 4, 0) };
-                var points = Text($"{item.Points} pts", 12, true);
+                var points = Text(item.Points > 0 ? $"{item.Points} pts" : item.Rarity.HasValue ? $"{item.Rarity.Value:0.#}%" : "", 12, true);
+                if (item.Points <= 0 && item.Rarity.HasValue)
+                    points.ToolTip = $"{item.Rarity.Value:0.#}% of players have this";
                 points.HorizontalAlignment = HorizontalAlignment.Right;
                 side.Children.Add(points);
                 var when = Text(item.Unlocked ? item.When.Value.ToLocalTime().ToString("d MMM yyyy", CultureInfo.CurrentCulture) : "Locked", 11);

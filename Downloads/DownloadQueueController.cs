@@ -4,6 +4,7 @@ using RomM.Games;
 using SharpCompress.Archives;
 using SharpCompress.Common;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -167,7 +168,10 @@ namespace RomM.Downloads
 
             try
             {
-                await DownloadAndInstall(item, req).ConfigureAwait(false);
+                if (req.Work != null)
+                    await req.Work(item, item.Cts.Token).ConfigureAwait(false);
+                else
+                    await DownloadAndInstall(item, req).ConfigureAwait(false);
 
                 item.SetStatus(DownloadStatus.Completed, "Completed");
                 item.SetProgress(item.ProgressMaximum, item.ProgressMaximum, false);
@@ -385,6 +389,7 @@ namespace RomM.Downloads
             {
                 item.SetStatus(DownloadStatus.Extracting, "Extracting...");
                 Logger.Info($"Extracting {req.GamePath}...");
+                req.ArchiveEntries = ZipEntriesOf(req.GamePath);
 
                 if (req.Use7z && !string.IsNullOrEmpty(req.PathTo7Z) && req.PathTo7Z.EndsWith("7z.exe", StringComparison.OrdinalIgnoreCase))
                 {
@@ -395,6 +400,7 @@ namespace RomM.Downloads
                     ExtractArchiveWithEntryProgress(req.GamePath, req.InstallDir, item, ct);
                 }
                 try { File.Delete(req.GamePath); } catch { }
+                req.Extracted = true;
             }
 
             // Build rom list + signal installed
@@ -425,6 +431,27 @@ namespace RomM.Downloads
         // really are one. Disc images are left alone, whatever SharpCompress makes of them -- it
         // took a Wii .wbfs for an archive, "extracted" it to nothing, and the install failed.
         private static readonly string[] ArchiveExtensions = { ".zip", ".7z", ".rar", ".tar", ".gz", ".tgz", ".bz2", ".tbz2", ".xz", ".txz" };
+
+        // A zip's files (name, CRC-32, size), for updates; null for another kind of archive or
+        // when it cannot be read.
+        private static List<Games.InstalledManifest.ZipEntryRecord> ZipEntriesOf(string path)
+        {
+            if (!string.Equals(Path.GetExtension(path), ".zip", StringComparison.OrdinalIgnoreCase))
+                return null;
+            try
+            {
+                using (var archive = SharpCompress.Archives.Zip.ZipArchive.Open(path))
+                {
+                    return archive.Entries.Where(e => !e.IsDirectory)
+                        .Select(e => new Games.InstalledManifest.ZipEntryRecord { Name = e.Key, Crc = unchecked((uint)e.Crc), Size = e.Size })
+                        .ToList();
+                }
+            }
+            catch
+            {
+                return null;
+            }
+        }
 
         private static bool IsFileCompressed(string filePath)
         {
@@ -547,6 +574,8 @@ namespace RomM.Downloads
 
         private void TryCleanupPartialInstall(DownloadRequest req)
         {
+            if (req.KeepInstallOnFailure)
+                return;   // an update: the game stays as it was
             try
             {
                 // delete partial downloaded file first

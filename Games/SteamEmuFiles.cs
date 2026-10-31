@@ -416,6 +416,12 @@ namespace RomM.Games
             return 0;
         }
 
+        // Folders of a game's data, never holding its dlls: not looked through.
+        private static readonly HashSet<string> s_noDlls = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "Content", "Paks", "Movies", "Localization", "Saved", "Shaders", "_CommonRedist", "Redist", "DirectX", "Textures", "Audio", "Sounds", "Video", "Videos",
+        };
+
         /// <summary>
         /// The folders in a game's install folder holding a steam_api(64).dll (or a steam_settings
         /// folder), nearest the top first; a few levels down at most.
@@ -436,14 +442,15 @@ namespace RomM.Games
                         if (File.Exists(Path.Combine(folder, "steam_api64.dll")) || File.Exists(Path.Combine(folder, "steam_api.dll"))
                             || Directory.Exists(Path.Combine(folder, "steam_settings")))
                             found.Add(folder);
-                        next.AddRange(Directory.GetDirectories(folder));
+                        // Not into the game's data (thousands of folders, never a dll).
+                        next.AddRange(Directory.GetDirectories(folder).Where(sub => !s_noDlls.Contains(Path.GetFileName(sub))));
                     }
                     catch
                     {
                         // Not readable: passed over.
                     }
                 }
-                level = next.Count > 4000 ? next.Take(4000).ToList() : next;
+                level = next.Count > 20000 ? next.Take(20000).ToList() : next;
             }
             return found;
         }
@@ -512,6 +519,73 @@ namespace RomM.Games
                 // Not readable.
             }
             return folders;
+        }
+
+        /// <summary>
+        /// Whether a dll's folder carries a Steam emulator's own files (gbe_fork's and Goldberg's
+        /// steam_settings, or another's ini), rather than Steam's own dll.
+        /// </summary>
+        public static bool IsEmulatorFolder(string dllFolder) =>
+            !string.IsNullOrEmpty(dllFolder) && (Directory.Exists(Path.Combine(dllFolder, "steam_settings"))
+                || new[] { "steam_emu.ini", "cream_api.ini", "SmartSteamEmu.ini", "ColdClientLoader.ini", "SKIDROW.ini", "CPY.ini", "ds.ini" }
+                    .Any(name => File.Exists(Path.Combine(dllFolder, name))));
+
+        /// <summary>
+        /// Where a Steam emulator keeps a game's Steam Cloud files (what the game saves through
+        /// Steam's remote storage, which on Steam itself lives in userdata\&lt;user&gt;\&lt;appid&gt;\remote):
+        /// the "remote" folder in the emulator's folder for the app. The one holding files, the
+        /// newest first; when none does yet, where gbe_fork (or Goldberg, when its saves folder is
+        /// the one there) would put it, so a save from RomM can be put there before the first
+        /// play. Null when the dll's folder is not an emulator's.
+        /// </summary>
+        public static string CloudFolder(int appId, string dllFolder, Func<Environment.SpecialFolder, string> special = null)
+        {
+            if (appId <= 0)
+                return null;
+            List<string> folders = SaveFolders(appId, dllFolder, special);
+            string newest = null;
+            DateTime newestTime = DateTime.MinValue;
+            foreach (string folder in folders)
+            {
+                // EMPRESS's folder for the app is already inside its remote folder (remote\<appid>).
+                string parent = Path.GetDirectoryName(folder);
+                string remote = string.Equals(Path.GetFileName(parent), "remote", StringComparison.OrdinalIgnoreCase)
+                    ? parent
+                    : Path.Combine(folder, "remote");
+                try
+                {
+                    if (!Directory.Exists(remote))
+                        continue;
+                    DateTime time = Directory.EnumerateFiles(remote, "*", SearchOption.AllDirectories)
+                        .Select(File.GetLastWriteTimeUtc).DefaultIfEmpty(DateTime.MinValue).Max();
+                    if (time > newestTime)
+                    {
+                        newest = remote;
+                        newestTime = time;
+                    }
+                }
+                catch
+                {
+                    // Not readable: passed over.
+                }
+            }
+            if (newest != null)
+                return newest;
+            if (!IsEmulatorFolder(dllFolder))
+                return null;
+
+            // None yet. gbe_fork's own setting first (the first folders, from configs.user.ini or
+            // local_save.txt), else whichever of gbe_fork's and Goldberg's saves folders is there.
+            string appData = (special ?? Environment.GetFolderPath)(Environment.SpecialFolder.ApplicationData);
+            string id = appId.ToString(CultureInfo.InvariantCulture);
+            string gse = Path.Combine(appData, "GSE Saves", id);
+            string goldberg = Path.Combine(appData, "Goldberg SteamEmu Saves", id);
+            // The folders listed before gbe_fork's default are the configured ones.
+            string configured = folders.TakeWhile(f => !string.Equals(f, gse, StringComparison.OrdinalIgnoreCase)).FirstOrDefault();
+            if (configured != null)
+                return Path.Combine(configured, "remote");
+            bool goldbergThere = Directory.Exists(Path.GetDirectoryName(goldberg)) && !Directory.Exists(Path.GetDirectoryName(gse));
+            return Path.Combine(goldbergThere ? goldberg : gse, "remote");
         }
 
         private static string IniValue(string text, string section, string key)

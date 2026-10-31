@@ -67,8 +67,15 @@ namespace RomM.Games
             Source known;
             lock (_lock)
                 known = Sources.TryGetValue(game.Id, out Source kept) && kept.Kind == SteamEmu ? kept : null;
-            if (known != null && known.AppId > 0 && !string.IsNullOrEmpty(known.DllFolder) && Directory.Exists(known.DllFolder))
+            bool stillThere = known != null && known.AppId > 0
+                && (!string.IsNullOrEmpty(known.DllFolder)
+                    ? Directory.Exists(known.DllFolder)
+                    : SteamEmuFiles.NewestFile(SteamEmuFiles.SaveFolders(known.AppId, null)) != null);
+            if (stillThere)
+            {
+                _cannotEarnHere[game.Id] = false;
                 return known;
+            }
             if (string.IsNullOrEmpty(installDir) || !Directory.Exists(installDir))
                 return null;
             // Looked through lately and nothing found (looked again after a while, or once the
@@ -84,13 +91,19 @@ namespace RomM.Games
                 return null;
             }
             Remember(game.Id, found);
+            // It can earn them now (an emulator put in since it was found without one).
+            _cannotEarnHere[game.Id] = false;
             s_log.Info($"[Achievements] {game.Name}: Steam emulator achievements, app {found.AppId}{(found.DllFolder != null ? " (" + found.DllFolder + ")" : "")}.");
             return found;
         }
 
+        // The game's Steam emulator: by its dll (steam_api, as deep as Unreal Engine games keep
+        // it: Engine\Binaries\ThirdParty\Steamworks\...\Win64) with the emulator's own files beside
+        // it, or by the file of achievements an emulator has written for its app id wherever the
+        // dll is. Null when neither.
         private Source LocateSteamEmu(Game game, string installDir)
         {
-            List<string> dlls = SteamEmuFiles.DllFolders(installDir);
+            List<string> dlls = SteamEmuFiles.DllFolders(installDir, depth: 9);
             int appId = 0;
             string dll = null;
             foreach (string folder in dlls.Concat(new[] { installDir }))
@@ -102,14 +115,7 @@ namespace RomM.Games
                     break;
                 }
             }
-            if (dlls.Count == 0)
-                return null;   // no steam_api dll: not a Steam game's copy (GOG's and the like)
-            dll = dll ?? dlls[0];
-
-            // An emulator's own marks beside the dll.
-            bool marked = Directory.Exists(Path.Combine(dll, "steam_settings"))
-                || new[] { "steam_emu.ini", "cream_api.ini", "SmartSteamEmu.ini", "ColdClientLoader.ini", "SKIDROW.ini", "CPY.ini", "ds.ini" }
-                    .Any(name => File.Exists(Path.Combine(dll, name)));
+            dll = dll ?? dlls.FirstOrDefault();
             if (appId <= 0)
             {
                 // The app RomM (or Steam's store) matched the game with.
@@ -124,10 +130,18 @@ namespace RomM.Games
             }
             if (appId <= 0)
                 return null;
+
+            // An emulator's own marks beside the dll.
+            bool marked = dll != null && (Directory.Exists(Path.Combine(dll, "steam_settings"))
+                || new[] { "steam_emu.ini", "cream_api.ini", "SmartSteamEmu.ini", "ColdClientLoader.ini", "SKIDROW.ini", "CPY.ini", "ds.ini" }
+                    .Any(name => File.Exists(Path.Combine(dll, name))));
             string file = SteamEmuFiles.NewestFile(SteamEmuFiles.SaveFolders(appId, dll));
             if (!marked && file == null)
-                return null;   // Steam's own dll, most likely: Steam keeps those achievements
-            return new Source { Kind = SteamEmu, Path = file ?? "", AppId = appId, DllFolder = dll };
+            {
+                s_log.Info($"[Achievements] {game.Name}: no Steam emulator found (steam_api {(dll != null ? "in " + dll : "not found")}, no achievements file for app {appId}).");
+                return null;   // Steam's own dll, most likely, or none: nothing here keeps achievements
+            }
+            return new Source { Kind = SteamEmu, Path = file ?? "", AppId = appId, DllFolder = marked ? dll : null };
         }
 
         /// <summary>
@@ -155,7 +169,24 @@ namespace RomM.Games
             if (source == null || source.AppId <= 0)
                 return null;
             string icons = Path.Combine(_iconsFolder, SteamEmu + "_" + source.AppId);
-            List<SteamEmuFiles.Entry> list = SettingsList(source, icons) ?? SteamList(source.AppId, icons);
+            List<SteamEmuFiles.Entry> list = SettingsList(source, icons);
+            if (list == null)
+                list = SteamList(source.AppId, icons);
+            else if (list.Count > 0 && list.All(e => !e.Percent.HasValue))
+            {
+                // The emulator's own list (steam_settings\achievements.json) has no share of
+                // players: Steam's (kept a month), by the same names, gives it.
+                List<SteamEmuFiles.Entry> steam = SteamList(source.AppId, null);
+                if (steam != null)
+                {
+                    var percents = steam.Where(e => e.Percent.HasValue)
+                        .GroupBy(e => e.Id, StringComparer.OrdinalIgnoreCase)
+                        .ToDictionary(g => g.Key, g => g.First().Percent, StringComparer.OrdinalIgnoreCase);
+                    foreach (SteamEmuFiles.Entry entry in list)
+                        if (percents.TryGetValue(entry.Id, out double? percent))
+                            entry.Percent = percent;
+                }
+            }
 
             var unlocks = new Dictionary<string, SteamEmuFiles.Unlock>(StringComparer.OrdinalIgnoreCase);
             string file = SteamEmuFiles.NewestFile(SteamEmuFiles.SaveFolders(source.AppId, source.DllFolder));
@@ -191,6 +222,7 @@ namespace RomM.Games
                     Description = entry.Description,
                     Hidden = entry.Hidden,
                     Order = entry.Order,
+                    Percent = entry.Percent,
                 });
             }
             foreach (KeyValuePair<string, SteamEmuFiles.Unlock> unlock in unlocks)
@@ -241,15 +273,30 @@ namespace RomM.Games
         internal List<SteamEmuFiles.Entry> SteamListFor(int appId) =>
             appId > 0 ? SteamList(appId, null) : null;
 
-        /// <summary>Where Steam serves an achievement's picture, by the file name its list gives.</summary>
-        internal static string SteamIconUrl(int appId, string name)
+        /// <summary>
+        /// Where Steam serves an achievement's picture, by the file name its list gives: newer
+        /// games' only on Steam's newer address (community_assets), older ones' on the older one
+        /// too (<see cref="SteamIconUrls"/> gives both, newer first).
+        /// </summary>
+        internal static string SteamIconUrl(int appId, string name) => SteamIconUrls(appId, name).FirstOrDefault();
+
+        internal static List<string> SteamIconUrls(int appId, string name)
         {
             if (string.IsNullOrEmpty(name))
-                return null;
-            return name.StartsWith("http", StringComparison.OrdinalIgnoreCase)
-                ? name
-                : $"https://cdn.akamai.steamstatic.com/steamcommunity/public/images/apps/{appId}/{name}";
+                return new List<string>();
+            if (name.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                return new List<string> { name };
+            return new List<string>
+            {
+                $"https://shared.fastly.steamstatic.com/community_assets/images/apps/{appId}/{name}",
+                $"https://shared.akamai.steamstatic.com/community_assets/images/apps/{appId}/{name}",
+                $"https://cdn.akamai.steamstatic.com/steamcommunity/public/images/apps/{appId}/{name}",
+            };
         }
+
+        // Pictures that could be had from none of Steam's addresses: not asked for again until
+        // Playnite starts again.
+        private static readonly ConcurrentDictionary<string, byte> s_iconMissing = new ConcurrentDictionary<string, byte>();
 
         // Steam's list for the app, kept a month; its icons fetched once into icons (none when
         // icons is null). Null when it cannot be had.
@@ -333,18 +380,28 @@ namespace RomM.Games
                     if (string.IsNullOrEmpty(pair.Name))
                         continue;
                     string to = IconFile(icons, SteamEmu, entry.Id, pair.Gray);
-                    if (File.Exists(to))
+                    if (File.Exists(to) || s_iconMissing.ContainsKey(to))
                         continue;
-                    try
+                    string problem = null;
+                    foreach (string url in SteamIconUrls(appId, pair.Name))
                     {
-                        string url = SteamIconUrl(appId, pair.Name);
-                        byte[] bytes = s_steam.GetByteArrayAsync(url).GetAwaiter().GetResult();
-                        File.WriteAllBytes(to, bytes);
+                        try
+                        {
+                            byte[] bytes = s_steam.GetByteArrayAsync(url).GetAwaiter().GetResult();
+                            File.WriteAllBytes(to, bytes);
+                            problem = null;
+                            break;
+                        }
+                        catch (Exception ex)
+                        {
+                            problem = ex.Message;
+                        }
                     }
-                    catch (Exception ex)
+                    if (problem != null)
                     {
-                        s_log.Info($"[Achievements] Could not fetch the icon of {entry.Id} (app {appId}): {ex.Message}");
-                        return;   // the rest next time
+                        // This one only: the rest are still fetched.
+                        s_iconMissing[to] = 0;
+                        s_log.Info($"[Achievements] Could not fetch the icon of {entry.Id} (app {appId}) from Steam: {problem}");
                     }
                 }
             }

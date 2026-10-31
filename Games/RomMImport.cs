@@ -45,6 +45,22 @@ namespace RomM.Games
         // Set by ImportGame when it declines a ROM that is neither added nor installed.
         bool _declined;
 
+        /// <summary>A game's pictures, left to be fetched once it is in the list (see ArtLater).</summary>
+        internal sealed class LaterArt
+        {
+            public Guid GameId;
+            public RomMRom Rom;
+            public MetadataFile Cover;
+            public MetadataFile Background;
+        }
+
+        /// <summary>
+        /// When set, games are added without their pictures (cover, background, icon, logo), each
+        /// noted here instead, so the list is complete sooner; FetchArt brings them in after.
+        /// </summary>
+        public List<LaterArt> ArtLater { get; set; }
+        private LaterArt _pendingArt;   // ImportGame's, until the game has its id
+
         public RomMImport(RomM plugin, LibraryImportGamesArgs args, EmulatorMapping mapping, List<RomMRom> roms, List<int> favourites, RomMAchievementSync achievements = null, bool partial = false)
         {
             _partial = partial;
@@ -189,6 +205,8 @@ namespace RomM.Games
                         EnsureLogo(existingGame, ROM);
                         _achievements?.Apply(existingGame, ROM);
                         _plugin.Videos.Set(existingGame.Id, ROM.SSMetadata?.VideoPath ?? ROM.SSMetadata?.VideoNormalizedPath);
+                        // An update on the server for it (its files against those it was installed from).
+                        _plugin.Updates?.Check(existingGame, ROM);
 
                         // Save Game ROM data to file
                         SaveGameData(ROM, previous, previousJson, applied);
@@ -236,7 +254,16 @@ namespace RomM.Games
                     if (importedGame != null)
                     {
                         _inLibrary.Add(ROM.Id);
-                        EnsureLogo(importedGame, ROM);
+                        if (ArtLater != null && _pendingArt != null)
+                        {
+                            _pendingArt.GameId = importedGame.Id;
+                            ArtLater.Add(_pendingArt);
+                        }
+                        else
+                        {
+                            EnsureLogo(importedGame, ROM);
+                        }
+                        _pendingArt = null;
                         _achievements?.Apply(importedGame, ROM);
                         _plugin.Videos.Set(importedGame.Id, ROM.SSMetadata?.VideoPath ?? ROM.SSMetadata?.VideoNormalizedPath);
                         games.Add(importedGame);
@@ -336,7 +363,18 @@ namespace RomM.Games
             var metadata = RomMMetadataMapper.BuildBaseMetadata(ROM, _plugin.Settings.RomMHost, _plugin.Playnite.ApplicationSettings.AgeRatingOrgPriority.ToString(),
                 RomMMediaProbe.For(_plugin.Settings.RomMHost, _args.CancelToken));
 
-            RomMIconNormalizer.Apply(metadata, ROM, _plugin.Settings.RomMHost, _plugin.Logger, _args.CancelToken);
+            if (ArtLater != null)
+            {
+                // The pictures after: the game in the list now, as a name.
+                _pendingArt = new LaterArt { Rom = ROM, Cover = metadata.CoverImage, Background = metadata.BackgroundImage };
+                metadata.CoverImage = null;
+                metadata.BackgroundImage = null;
+                metadata.Icon = null;
+            }
+            else
+            {
+                RomMIconNormalizer.Apply(metadata, ROM, _plugin.Settings.RomMHost, _plugin.Logger, _args.CancelToken);
+            }
 
             metadata.Source = _plugin.Source;
             metadata.GameId = $"{ROM.Id}:{ROM.SHA1}";
@@ -394,11 +432,13 @@ namespace RomM.Games
         // <Playnite config>\ExtraMetadata\games\<game id>\Logo.png. A logo that is already there
         // (from RomM, another source, or set by hand) is never replaced. Best-effort: a failure is
         // logged and the import carries on.
-        private void EnsureLogo(Game game, RomMRom ROM)
+        private void EnsureLogo(Game game, RomMRom ROM) => EnsureLogo(_plugin, game, ROM, _args.CancelToken);
+
+        private static void EnsureLogo(RomM _plugin, Game game, RomMRom ROM, CancellationToken cancel)
         {
             try
             {
-                if (game == null || _args.CancelToken.IsCancellationRequested)
+                if (game == null || cancel.IsCancellationRequested)
                     return;
 
                 string url = RomMMetadataMapper.LogoUrl(_plugin.Settings.RomMHost, ROM, out bool servedByRomM);
@@ -411,7 +451,7 @@ namespace RomM.Games
                     return;
 
                 var client = servedByRomM ? HttpClientSingleton.Instance : s_externalHttp;
-                using (var cts = CancellationTokenSource.CreateLinkedTokenSource(_args.CancelToken))
+                using (var cts = CancellationTokenSource.CreateLinkedTokenSource(cancel))
                 {
                     cts.CancelAfter(TimeSpan.FromSeconds(20));
                     using (var response = client.GetAsync(url, cts.Token).GetAwaiter().GetResult())
@@ -441,6 +481,98 @@ namespace RomM.Games
             catch (Exception ex)
             {
                 _plugin.Logger.Warn($"[Importer] Logo for {ROM.Name} not downloaded: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// The pictures left for later (ArtLater) fetched and set on their games: the icon
+        /// fitted as on an import, the cover and background as Playnite would fetch them (no
+        /// RomM credentials sent elsewhere), the logo for ExtraMetadataLoader. Best-effort, one
+        /// game at a time; a game since removed is passed over.
+        /// </summary>
+        internal static void FetchArt(RomM plugin, IEnumerable<LaterArt> arts, CancellationToken cancel)
+        {
+            foreach (LaterArt art in arts)
+            {
+                if (cancel.IsCancellationRequested)
+                    return;
+                try
+                {
+                    Game game = plugin.Playnite.Database.Games.Get(art.GameId);
+                    if (game == null)
+                        continue;
+                    string cover = LocalFile(plugin, art.Cover, game.Id, cancel);
+                    string background = LocalFile(plugin, art.Background, game.Id, cancel);
+                    var iconOnly = new GameMetadata();
+                    RomMIconNormalizer.Apply(iconOnly, art.Rom, plugin.Settings.RomMHost, plugin.Logger, cancel);
+                    if (iconOnly.Icon == null)
+                    {
+                        string iconUrl = RomMMetadataMapper.IconUrl(plugin.Settings.RomMHost, art.Rom, out bool _);
+                        if (!string.IsNullOrEmpty(iconUrl))
+                            iconOnly.Icon = new MetadataFile(iconUrl);
+                    }
+                    string icon = LocalFile(plugin, iconOnly.Icon, game.Id, cancel);
+
+                    game = plugin.Playnite.Database.Games.Get(art.GameId);
+                    if (game == null)
+                        continue;
+                    bool changed = false;
+                    if (cover != null && string.IsNullOrEmpty(game.CoverImage)) { game.CoverImage = cover; changed = true; }
+                    if (background != null && string.IsNullOrEmpty(game.BackgroundImage)) { game.BackgroundImage = background; changed = true; }
+                    if (icon != null && string.IsNullOrEmpty(game.Icon)) { game.Icon = icon; changed = true; }
+                    if (changed)
+                        plugin.Playnite.Database.Games.Update(game);
+                    EnsureLogo(plugin, game, art.Rom, cancel);
+                }
+                catch (Exception ex)
+                {
+                    plugin.Logger.Warn($"[Importer] Pictures for {art.Rom?.Name} not fetched: {ex.Message}");
+                }
+            }
+        }
+
+        // A picture in the game's own files (Database.AddFile), from its bytes or its url; null
+        // when there is none or it could not be had.
+        private static string LocalFile(RomM plugin, MetadataFile file, Guid gameId, CancellationToken cancel)
+        {
+            if (file == null)
+                return null;
+            byte[] bytes = file.Content;
+            string name = file.FileName;
+            if (bytes == null)
+            {
+                if (string.IsNullOrEmpty(file.Path) || !file.Path.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                    return null;
+                using (var cts = CancellationTokenSource.CreateLinkedTokenSource(cancel))
+                {
+                    cts.CancelAfter(TimeSpan.FromSeconds(30));
+                    using (var response = s_externalHttp.GetAsync(file.Path, cts.Token).GetAwaiter().GetResult())
+                    {
+                        if (!response.IsSuccessStatusCode)
+                            return null;
+                        bytes = response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult();
+                    }
+                }
+                if (string.IsNullOrEmpty(name))
+                    name = Path.GetFileName(new Uri(file.Path).AbsolutePath);
+            }
+            if (bytes == null || bytes.Length == 0)
+                return null;
+            if (string.IsNullOrEmpty(name) || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+                name = "image";
+            if (string.IsNullOrEmpty(Path.GetExtension(name)))
+                name += ".png";
+            string folder = Path.Combine(Path.GetTempPath(), "RomMnite-art-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(folder);
+            string temp = Path.Combine(folder, name);
+            try
+            {
+                File.WriteAllBytes(temp, bytes);
+                return plugin.Playnite.Database.AddFile(temp, gameId);
+            }
+            finally
+            {
+                try { Directory.Delete(folder, true); } catch { }
             }
         }
 

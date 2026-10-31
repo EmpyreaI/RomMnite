@@ -55,6 +55,7 @@ namespace RomM.Games
             public int Points { get; set; }
             public bool Hidden { get; set; }
             public int Order { get; set; }
+            public double? Percent { get; set; }   // Steam's: the share of players who have it
         }
 
         /// <summary>An account's record for one game; also the content of its RomM note.</summary>
@@ -251,6 +252,9 @@ namespace RomM.Games
             if (game == null)
                 return;
             _sessionStarts[game.Id] = DateTime.UtcNow;
+            // A Windows game looked through before and found without a Steam emulator is looked
+            // through again now: one may have been put in its folder since.
+            _noSteamEmu.TryRemove(game.Id, out var _);
             StartLive(game, _sessionStarts[game.Id]);
         }
 
@@ -374,6 +378,7 @@ namespace RomM.Games
                         }
                     }
                     string icons = Path.Combine(_iconsFolder, set.Kind + "_" + set.SetId);
+                    var now = new Dictionary<string, DateTime>();
                     foreach (KeyValuePair<string, DateTime?> unlock in set.Unlocked)
                     {
                         if (!watch.Seen.Add(unlock.Key))
@@ -384,6 +389,7 @@ namespace RomM.Games
                         Definition definition = set.Definitions.FirstOrDefault(d => d.Id == unlock.Key);
                         if (definition == null)
                             continue;
+                        now[unlock.Key] = unlock.Value ?? DateTime.UtcNow;
                         string icon = IconFile(icons, set.Kind, definition.Id);
                         UnlockedLive?.Invoke(watch.Game, new AchievementItem
                         {
@@ -393,14 +399,43 @@ namespace RomM.Games
                             BadgeUrl = File.Exists(icon) ? icon : null,
                             UnlockedUtc = unlock.Value ?? DateTime.UtcNow,
                             Order = definition.Order,
+                            Rarity = definition.Percent,
                         });
                     }
+                    // The account's at once (this session's, as SessionEnded would make them), so
+                    // the overlay and the game's page show them while it is still being played.
+                    if (now.Count > 0)
+                        KeepLive(watch.Game, set, now);
                 }
             }
             catch (Exception ex)
             {
                 s_log.Debug($"[Achievements] Could not read {watch.Game.Name}'s unlocks: {ex.Message}");
             }
+        }
+
+        // Unlocks seen during play put into the account's record and shown; the note on the
+        // server is brought up to date when the session ends.
+        private void KeepLive(Game game, EmulatorSet set, Dictionary<string, DateTime> unlocked)
+        {
+            string account = _accountFolder;
+            if (account == null)
+                return;
+            Record record = LoadRecord(account, game.Id) ?? new Record();
+            record.Kind = set.Kind;
+            record.SetId = set.SetId;
+            if (set.Definitions.Count > 0)
+                record.Definitions = set.Definitions;
+            foreach (KeyValuePair<string, DateTime> unlock in unlocked)
+            {
+                if (!record.Unlocked.ContainsKey(unlock.Key))
+                    record.Unlocked[unlock.Key] = unlock.Value;
+            }
+            record.UpdatedUtc = DateTime.UtcNow;
+            if (account != _accountFolder)
+                return;
+            SaveRecord(account, game.Id, record);
+            Show(game, record);
         }
 
         /// <summary>After a session: what it unlocked becomes the account's. In the background.</summary>
@@ -619,6 +654,7 @@ namespace RomM.Games
                     Points = definition.Points,
                     BadgeUrl = !hidden && File.Exists(icon) ? icon : null,
                     BadgeLockedUrl = !hidden && File.Exists(gray) ? gray : null,
+                    Rarity = definition.Percent,
                     UnlockedUtc = unlocked ? when : (DateTime?)null,
                     Order = definition.Order,
                     Hidden = hidden,

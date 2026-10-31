@@ -145,29 +145,26 @@ namespace RomM.Setup
         }
 
         /// <summary>The emulator's own settings, just before a game starts in it.</summary>
-        /// <param name="menusOnStartSelect">Emulators' own menus moved to Start + Select (EmulatorMenus).</param>
-        /// <param name="overlayHasHome">Whether the overlay opens on the Home button.</param>
-        /// <param name="overlayOnStartSelect">Whether the overlay opens on Start + Select: the emulators' menus are taken off it.</param>
-        /// <param name="upscale">Rendering at the display's resolution (EmulatorUpscale); off puts back what it set.</param>
-        /// <param name="upscaleRecord">Where EmulatorUpscale notes what it set.</param>
-        internal static void PrepareSettings(Emulator emulator, string installDir, bool menusOnStartSelect = false, bool overlayHasHome = false,
-            bool overlayOnStartSelect = false, bool upscale = true, string upscaleRecord = null)
+        /// <param name="menus">Where the emulators' own menus go (EmulatorMenus.For); null leaves them.</param>
+        /// <param name="graphics">Resolution, widescreen, stretching and VSync (EmulatorGraphics); null leaves them.</param>
+        internal static void PrepareSettings(Emulator emulator, string installDir, EmulatorMenus.Place? menus = null,
+            GraphicsChoice graphics = null)
         {
             if (emulator == null || string.IsNullOrEmpty(installDir))
                 return;
             string id = ((emulator.BuiltInConfigId ?? "") + " " + (emulator.Name ?? "")).ToLowerInvariant();
             try
             {
-                if (overlayOnStartSelect)
-                    EmulatorMenus.Release(id, installDir);
-                else if (menusOnStartSelect)
-                    EmulatorMenus.Apply(id, installDir, overlayHasHome);
+                if (menus.HasValue)
+                    EmulatorMenus.Apply(id, installDir, menus.Value);
 
                 if (id.Contains("pcsx2"))
                 {
                     // Its first-run wizard done for it (BIOS, XInput controller), if not yet.
                     Pcsx2FirstRun.Prepare(installDir);
                     Pcsx2FirstRun.SecondPlayer(installDir, EmulatorControllers.SdlGamepads());
+                    // Slot 1 a folder card, so each game's saves sync on their own (Pcsx2SaveHandler).
+                    Saves.Handlers.Pcsx2SaveHandler.UseFolderCard(installDir, s_log);
                     string ini = Existing(Path.Combine(installDir, "inis", "PCSX2.ini"),
                         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "PCSX2", "inis", "PCSX2.ini"));
                     Set("PCSX2", ini, SettingsFile.SetIni(ini, "UI", new Dictionary<string, string> { ["ConfirmShutdown"] = "false" }));
@@ -243,11 +240,11 @@ namespace RomM.Setup
             // After the first-run steps above, which may make the files it edits.
             try
             {
-                EmulatorUpscale.Apply(id, installDir, upscaleRecord, upscale);
+                EmulatorGraphics.Apply(id, installDir, graphics);
             }
             catch (Exception ex)
             {
-                s_log.Warn($"[EmulatorLaunch] Could not set {emulator.Name}'s resolution: {ex.Message}");
+                s_log.Warn($"[EmulatorLaunch] Could not set {emulator.Name}'s graphics: {ex.Message}");
             }
         }
 

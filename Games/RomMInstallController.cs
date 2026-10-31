@@ -67,7 +67,7 @@ namespace RomM.Games
 
             bool windows = global::RomM.Setup.EmulatorSetup.IsWindowsPlatform(_gameData.Mapping?.RomMPlatform);
 
-            // Declared first: the install callback below reads it (its download size).
+            // Declared first: the install callback below reads it (what it was installed from).
             DownloadRequest req = null;
             req = new DownloadRequest
             {
@@ -147,27 +147,14 @@ namespace RomM.Games
 
                     InvokeOnInstalled(installedArgs);
 
-                    // A Windows game's size: what was downloaded. Playnite measures an installed
-                    // game with ROMs by its ROM files alone (GamesEditor.CalculateGameSize, run as
-                    // InvokeOnInstalled returns), which for a Windows game is its program file. Set
-                    // after that, with Playnite's scan date left as it is, so its library scans keep
-                    // it (they measure again only when that file changes).
-                    if (windows && req.DownloadedSize > 0)
-                    {
-                        try
-                        {
-                            var installed = _romM.Playnite.Database.Games[Game.Id];
-                            if (installed != null && installed.InstallSize != (ulong)req.DownloadedSize)
-                            {
-                                installed.InstallSize = (ulong)req.DownloadedSize;
-                                _romM.Playnite.Database.Games.Update(installed);
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            _romM.Logger.Warn($"[Downloads] Could not set {Game.Name}'s install size: {ex.Message}");
-                        }
-                    }
+                    // What it was installed from, for telling (and fetching in part) its updates.
+                    _romM.Updates?.Installed(game, _gameData.Id, req.InstallDir, req);
+
+                    // Its size on disk, all of it (InstallFootprint): Playnite measures a game
+                    // with ROMs by its ROM files alone (GamesEditor.CalculateGameSize, run as
+                    // InvokeOnInstalled returns), which for a disc is its .cue and for a folder
+                    // game one program file. Set after that.
+                    InstallFootprint.Update(_romM.Playnite, Game.Id);
                 },
 
                 OnCanceled = () =>

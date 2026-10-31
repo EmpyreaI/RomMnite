@@ -17,8 +17,11 @@ namespace RomM.Overlay
     /// with the game, the clock and the time played (this session, and in all), the game's
     /// achievements in a panel (unlocked first, newest first, then the rest dimmed), and Resume
     /// and Quit game. Keyboard and mouse work as anywhere; on the controller the bumpers choose
-    /// the achievements (LB, the D-pad scrolls them) or the buttons (RB, the D-pad moves between
-    /// them), A presses, B closes (GameOverlay reads it). Esc closes too.
+    /// the achievements (LB: the D-pad goes from one to the next, held it keeps going) or the
+    /// buttons (RB, the D-pad moves between them), A presses, B closes (GameOverlay reads it).
+    /// Esc closes too. Above the buttons, the game's cloud saves as they stand (SaveSync), looked
+    /// at again every few seconds. The buttons to press are shown as the controller's own
+    /// (ControllerGlyphs).
     /// </summary>
     internal sealed class OverlayWindow : Window
     {
@@ -47,9 +50,25 @@ namespace RomM.Overlay
         private ScrollViewer _scroller;
         private Border _listCard;
         private bool _inList;   // the controller's D-pad scrolls the achievements
+        private readonly List<Border> _rows = new List<Border>();
+        private readonly List<string> _rowKeys = new List<string>();
+        private readonly List<FrameworkElement> _rowDetails = new List<FrameworkElement>();   // the pop-out of each (null: none)
+        private readonly List<bool> _rowOpen = new List<bool>();
+        private int _selected = -1;
+        private bool _mouseInList;
+        private Border _savesCard;
+        private TextBlock _savesHeadline;
+        private TextBlock _savesDetail;
+        private int _ticks;
+        private bool _savesLooking;
 
         public event Action ResumeRequested;
         public event Action QuitRequested;
+        public event Action EndStreamRequested;
+        private StackPanel _actions;
+        private Button _quitButton;
+        private Button _endStream;
+        private static readonly Brush Purple = Frozen(Color.FromRgb(0x7A, 0x4C, 0xC8));
 
         /// <param name="keepsRunning">A Windows game, not paused while this is open.</param>
         public OverlayWindow(RomM plugin, Game game, DateTime startedUtc, Int32Rect screen, bool keepsRunning = false, GameAudio audio = null)
@@ -93,11 +112,34 @@ namespace RomM.Overlay
                     ResumeRequested?.Invoke();
                 }
             };
-            _clock.Tick += (s, e) => Tick();
+            _clock.Tick += (s, e) =>
+            {
+                Tick();
+                if (++_ticks % 5 == 0)
+                    ShowSaves();
+            };
             Closed += (s, e) => _clock.Stop();
+            // An achievement unlocked while it is open: the list again, where it was scrolled to.
+            Action<Guid> changed = id =>
+            {
+                if (id != _game.Id)
+                    return;
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    double offset = _scroller?.VerticalOffset ?? 0;
+                    Fill();
+                    _scroller?.ScrollToVerticalOffset(offset);
+                }));
+            };
+            if (_plugin.AchievementStore != null)
+            {
+                _plugin.AchievementStore.Changed += changed;
+                Closed += (s, e) => _plugin.AchievementStore.Changed -= changed;
+            }
 
             Content = Build();
             Tick();
+            ShowSaves();
             _clock.Start();
         }
 
@@ -168,30 +210,60 @@ namespace RomM.Overlay
             // Chosen (LB, or clicked into): its edge lit, the buttons' ring off (they lose focus).
             _scroller.GotKeyboardFocus += (s, e) => MarkList(true);
             _scroller.LostKeyboardFocus += (s, e) => MarkList(false);
+            // The arrow keys go from one achievement to the next, as the D-pad does.
+            _scroller.PreviewKeyDown += (s, e) =>
+            {
+                if (e.Key == Key.Up || e.Key == Key.Down)
+                {
+                    e.Handled = true;
+                    Move(e.Key == Key.Down ? 1 : -1);
+                }
+            };
+            _scroller.MouseEnter += (s, e) => { _mouseInList = true; ShowSelection(); };
+            _scroller.MouseLeave += (s, e) => { _mouseInList = false; ShowSelection(); };
             achievementsPanel.Children.Add(_scroller);
             _listCard = Card(achievementsPanel, new Thickness(0));
             body.Children.Add(_listCard);
 
+            // The right: the cloud saves at the top, the buttons at the bottom.
+            var right = new Grid();
+            right.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            right.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            right.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            _savesCard = SavesCard();
+            right.Children.Add(_savesCard);
             var actions = new StackPanel { VerticalAlignment = VerticalAlignment.Bottom };
+            Grid.SetRow(actions, 2);
+            right.Children.Add(actions);
             if (_audio != null)
                 actions.Children.Add(VolumeRow());
             actions.Children.Add(ActionButton("Resume", Blue, () => ResumeRequested?.Invoke()));
-            actions.Children.Add(ActionButton("Quit game", Red, () => QuitRequested?.Invoke()));
-            // Only the buttons of what is in use.
-            string how = InputActivity.ControllerInUse
-                ? "LB for the achievements, RB for these buttons. D-pad to scroll or choose, A to press, B to close."
-                : "Arrow keys or the mouse to choose, Enter to press, Esc to close.";
+            _quitButton = ActionButton("Quit game", Red, () => QuitRequested?.Invoke());
+            actions.Children.Add(_quitButton);
+            _actions = actions;
+            // Only the buttons of what is in use, as pictures of them, changing live as the
+            // controller or the keyboard is used (ControllerGlyphs.Bind).
+            string padHow = "{LB} Achievements   {RB} Buttons   {DPad} Move   {A} Select   {B} Close";
+            string keyHow = "{Arrows} Move   {Enter} Select   {Esc} Close";
             if (_audio != null)
-                how += InputActivity.ControllerInUse ? " Left and right change the game's volume." : " Left and right arrows change the game's volume.";
-            if (_keepsRunning)
-                how += InputActivity.ControllerInUse
-                    ? " The game keeps running and may see these buttons too."
-                    : " The game keeps running while this is open.";
-            var hint = Words(how, 12, FontWeights.Normal, Muted);
-            hint.Margin = new Thickness(0, 14, 0, 0);
+            {
+                padHow += "   {DPadH} Volume";
+                keyHow += "   {ArrowsH} Volume";
+            }
+            var hint = Words("", 13, FontWeights.Normal, Muted);
+            hint.LineHeight = 34;
+            hint.Margin = new Thickness(0, 12, 0, 0);
+            ControllerGlyphs.Bind(hint, padHow, keyHow);
             actions.Children.Add(hint);
-            Grid.SetColumn(actions, 2);
-            body.Children.Add(actions);
+            if (_keepsRunning)
+            {
+                var running = Words("", 12, FontWeights.Normal, Muted);
+                running.Margin = new Thickness(0, 4, 0, 0);
+                ControllerGlyphs.Bind(running, "The game keeps running and may see these buttons too.", "The game keeps running while this is open.");
+                actions.Children.Add(running);
+            }
+            Grid.SetColumn(right, 2);
+            body.Children.Add(right);
 
             return root;
         }
@@ -358,6 +430,11 @@ namespace RomM.Overlay
         private void MarkList(bool chosen)
         {
             _inList = chosen;
+            // The first one chosen when the list is first used.
+            if (chosen && _selected < 0 && _rows.Count > 0)
+                Select(0, true);
+            else
+                ShowSelection();
             if (_listCard != null)
             {
                 _listCard.BorderBrush = chosen ? Blue : Edge;
@@ -370,8 +447,11 @@ namespace RomM.Overlay
         {
             if (_inList)
             {
-                // About one achievement's row at a time.
-                _scroller?.ScrollToVerticalOffset(Math.Max(0, _scroller.VerticalOffset + step * 58));
+                // One achievement to the next; with none (no list), the panel scrolled.
+                if (_rows.Count > 0)
+                    Select(_selected < 0 ? 0 : _selected + step, true);
+                else
+                    _scroller?.ScrollToVerticalOffset(Math.Max(0, _scroller.VerticalOffset + step * 58));
                 return;
             }
             if (_buttons.Count == 0)
@@ -390,6 +470,196 @@ namespace RomM.Overlay
             chosen?.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         }
 
+        // ---- Streaming (Sunshine) ------------------------------------------------------------
+
+        /// <summary>The game is being streamed: "End stream" offered, above Quit game.</summary>
+        public void OfferEndStream()
+        {
+            if (_endStream != null || _actions == null || _quitButton == null)
+                return;
+            _endStream = ActionButton("End stream", Purple, () => EndStreamRequested?.Invoke());
+            _endStream.ToolTip = "Stops streaming to the other device. The game keeps running here.";
+            // In the order shown, for the D-pad.
+            _buttons.Remove(_endStream);
+            _buttons.Insert(_buttons.IndexOf(_quitButton), _endStream);
+            _actions.Children.Insert(_actions.Children.IndexOf(_quitButton), _endStream);
+        }
+
+        /// <summary>The stream ended (problem null) or could not be: said on the button.</summary>
+        public void StreamEnded(string problem)
+        {
+            if (_endStream == null)
+                return;
+            var label = (_endStream.Content as Border)?.Child is Border face ? face.Child as TextBlock : null;
+            if (problem == null)
+            {
+                if (label != null)
+                    label.Text = "Stream ended";
+                _endStream.IsEnabled = false;
+                _endStream.Opacity = 0.6;
+            }
+            else
+            {
+                if (label != null)
+                    label.Text = "End stream (failed)";
+                _endStream.ToolTip = problem;
+            }
+        }
+
+        // ---- Cloud saves ---------------------------------------------------------------------
+
+        private Border SavesCard()
+        {
+            var icon = new TextBlock
+            {
+                Text = "\uE753",
+                FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"),
+                FontSize = 22,
+                Foreground = Muted,
+                Margin = new Thickness(0, 2, 14, 0),
+                VerticalAlignment = VerticalAlignment.Top,
+            };
+            _savesHeadline = Words("", 16, FontWeights.SemiBold, Brushes.White);
+            _savesDetail = Words("", 12, FontWeights.Normal, Muted);
+            var words = new StackPanel();
+            words.Children.Add(Words("CLOUD SAVES", 11, FontWeights.SemiBold, Muted));
+            words.Children.Add(_savesHeadline);
+            words.Children.Add(_savesDetail);
+            var row = new DockPanel();
+            DockPanel.SetDock(icon, Dock.Left);
+            row.Children.Add(icon);
+            row.Children.Add(words);
+            Border card = Card(row, new Thickness(0));
+            card.Padding = new Thickness(16, 12, 16, 14);
+            card.Visibility = Visibility.Collapsed;   // until known, and only where saves sync
+            return card;
+        }
+
+        // The game's cloud saves as they stand, looked at off the UI thread (it may read files).
+        private void ShowSaves()
+        {
+            if (_savesLooking || _plugin.SaveSync == null || _savesCard == null)
+                return;
+            _savesLooking = true;
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                string headline = null, detail = null;
+                try
+                {
+                    _plugin.SaveSync.DescribeStatus(_game, out headline, out detail);
+                }
+                catch
+                {
+                    headline = null;
+                }
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    _savesLooking = false;
+                    if (string.IsNullOrEmpty(headline))
+                    {
+                        _savesCard.Visibility = Visibility.Collapsed;
+                        return;
+                    }
+                    _savesCard.Visibility = Visibility.Visible;
+                    _savesHeadline.Text = headline;
+                    _savesHeadline.Foreground = headline.StartsWith("Sync failed", StringComparison.OrdinalIgnoreCase) ? Red
+                        : headline.StartsWith("Syncing", StringComparison.OrdinalIgnoreCase) ? Blue
+                        : headline.StartsWith("Waiting", StringComparison.OrdinalIgnoreCase) ? Gold
+                        : Brushes.White;
+                    _savesDetail.Text = detail ?? "";
+                    _savesDetail.Visibility = string.IsNullOrEmpty(detail) ? Visibility.Collapsed : Visibility.Visible;
+                }));
+            });
+        }
+
+        // ---- The pop-out: how rare it is ----------------------------------------------------------
+
+        // Under an achievement, opened while it is the one chosen: the set's spread from rare to
+        // common with this one marked (RarityCurve), and in words.
+        private FrameworkElement Detail(AchievementItem item, double rarity, List<double> scores)
+        {
+            double rarerThan = RarityCurve.RarerThan(scores, rarity);
+            string share = item.Rarity.HasValue
+                ? $"{item.Rarity.Value:0.#}% of players have this"
+                : $"{item.Players ?? 0:N0} players have this";
+            string place = $"Rarer than {rarerThan:0}% of this game's achievements";
+            var panel = new StackPanel { Margin = new Thickness(60, 10, 4, 4) };
+            var words = Words(share + "   ·   " + place, 12, FontWeights.SemiBold, rarity <= RareAt ? Gold : Brushes.White);
+            words.Margin = new Thickness(0, 0, 0, 6);
+            panel.Children.Add(words);
+            panel.Children.Add(new RarityCurve(scores, rarity, "Rarest", "Most common"));
+            // Opened and closed by growing from its top (ShowSelection).
+            panel.LayoutTransform = new ScaleTransform(1, 0);
+            panel.Opacity = 0;
+            return panel;
+        }
+
+        private static void Pop(FrameworkElement detail, bool open)
+        {
+            var scale = (ScaleTransform)detail.LayoutTransform;
+            var time = TimeSpan.FromMilliseconds(180);
+            var ease = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut };
+            scale.BeginAnimation(ScaleTransform.ScaleYProperty, new System.Windows.Media.Animation.DoubleAnimation(open ? 1 : 0, time) { EasingFunction = ease });
+            detail.BeginAnimation(UIElement.OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(open ? 1 : 0, time) { EasingFunction = ease });
+        }
+
+        // ---- The achievement chosen -------------------------------------------------------------
+
+        // The chosen achievement lit (while the list is in use, or under the mouse).
+        private void ShowSelection()
+        {
+            bool lit = _inList || _mouseInList;
+            for (int i = 0; i < _rows.Count; i++)
+            {
+                bool on = lit && i == _selected;
+                _rows[i].BorderBrush = on ? Brushes.White : Brushes.Transparent;
+                _rows[i].Background = on ? Lighter : Brushes.Transparent;
+                // The chosen one's pop-out open, the others closed.
+                if (_rowDetails[i] != null && _rowOpen[i] != on)
+                {
+                    _rowOpen[i] = on;
+                    Pop(_rowDetails[i], on);
+                }
+            }
+        }
+
+        private static readonly Brush Lighter = Frozen(Color.FromArgb(0x22, 0xFF, 0xFF, 0xFF));
+
+        private void Select(int index, bool scroll)
+        {
+            if (_rows.Count == 0)
+                return;
+            _selected = Math.Max(0, Math.Min(_rows.Count - 1, index));
+            ShowSelection();
+            if (scroll)
+            {
+                Border row = _rows[_selected];
+                Action show = () =>
+                {
+                    // With a little of the rows around it in sight.
+                    row.BringIntoView(new Rect(0, -24, Math.Max(1, row.ActualWidth), row.ActualHeight + 48));
+                    if (row == _rows.FirstOrDefault())
+                        _scroller?.ScrollToTop();
+                };
+                show();
+                // Again once its pop-out has opened, so all of it is in sight.
+                var again = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+                again.Tick += (s, e) =>
+                {
+                    again.Stop();
+                    show();
+                };
+                again.Start();
+            }
+        }
+
+        /// <summary>Up or down held on the controller: on through the achievements (only there).</summary>
+        public void MoveHeld(int step)
+        {
+            if (_inList)
+                Move(step);
+        }
+
         // ---- Content --------------------------------------------------------------------------
 
         private void Tick()
@@ -403,7 +673,13 @@ namespace RomM.Overlay
         private void Fill()
         {
             GameAchievements set = _plugin.AchievementStore?.Get(_game.Id);
+            string selectedKey = _selected >= 0 && _selected < _rowKeys.Count ? _rowKeys[_selected] : null;
             _achievements.Children.Clear();
+            _rows.Clear();
+            _rowKeys.Clear();
+            _rowDetails.Clear();
+            _rowOpen.Clear();
+            _selected = -1;
             if (set == null || set.Items == null || set.Items.Count == 0)
             {
                 _achievementSummary.Text = "None for this game";
@@ -424,18 +700,82 @@ namespace RomM.Overlay
 
             IEnumerable<AchievementItem> ordered = set.Items.Where(i => i.Unlocked).OrderByDescending(i => i.When)
                 .Concat(set.Items.Where(i => !i.Unlocked).OrderBy(i => i.Hidden).ThenBy(i => i.Order));
+
+            // How rare each is (Rarity): the share of players (Steam's), or for RetroAchievements,
+            // its players compared with the set's most earned achievement's.
+            int mostPlayers = set.Items.Max(i => i.Players ?? 0);
+            Func<AchievementItem, double?> score = i => i.Rarity
+                ?? (i.Players.HasValue && mostPlayers > 0 ? 100.0 * i.Players.Value / mostPlayers : (double?)null);
+            List<double> scores = set.Items.Select(score).Where(v => v.HasValue).Select(v => v.Value).ToList();
             foreach (AchievementItem item in ordered)
-                _achievements.Children.Add(Row(item));
+            {
+                double? rarity = score(item);
+                var content = new StackPanel();
+                content.Children.Add(Row(item, rarity));
+                FrameworkElement detail = rarity.HasValue && scores.Count >= 2 ? Detail(item, rarity.Value, scores) : null;
+                if (detail != null)
+                    content.Children.Add(detail);
+                // Each in a frame lit when it is the one chosen.
+                var frame = new Border
+                {
+                    Child = content,
+                    BorderThickness = new Thickness(2),
+                    BorderBrush = Brushes.Transparent,
+                    Background = Brushes.Transparent,
+                    CornerRadius = new CornerRadius(6),
+                    Padding = new Thickness(8, 6, 8, 6),
+                    Margin = new Thickness(0, 0, 0, 2),
+                };
+                int index = _rows.Count;
+                frame.MouseEnter += (s, e) => Select(index, false);
+                _rows.Add(frame);
+                _rowDetails.Add(detail);
+                _rowOpen.Add(false);
+                _rowKeys.Add((item.Title ?? "") + "|" + item.Order);
+                _achievements.Children.Add(frame);
+            }
+            // The one chosen before, chosen again (the list redrawn on an unlock).
+            _selected = selectedKey == null ? -1 : _rowKeys.IndexOf(selectedKey);
+            if (_selected < 0 && selectedKey != null && _rows.Count > 0)
+                _selected = 0;
+            ShowSelection();
         }
 
-        private UIElement Row(AchievementItem item)
+        // A rare one: a tenth of players or fewer (or a tenth of the set's most earned).
+        private const double RareAt = 10;
+
+        private UIElement Row(AchievementItem item, double? rarity)
         {
-            var row = new DockPanel { Margin = new Thickness(0, 0, 0, 10), Opacity = item.Unlocked ? 1.0 : 0.5 };
-            var badge = new Image { Width = 48, Height = 48, Margin = new Thickness(0, 0, 12, 0), VerticalAlignment = VerticalAlignment.Top };
+            bool rare = rarity.HasValue && rarity.Value <= RareAt;
+            var outer = new DockPanel();
+            DockPanel row = outer;
+            var badge = new Image { Width = 48, Height = 48, VerticalAlignment = VerticalAlignment.Top, Opacity = item.Unlocked ? 1.0 : 0.5 };
             RenderOptions.SetBitmapScalingMode(badge, BitmapScalingMode.Fant);
             Store.StoreImages.Show(badge, item.Unlocked ? item.BadgeUrl : (item.BadgeLockedUrl ?? item.BadgeUrl), 96);
-            DockPanel.SetDock(badge, Dock.Left);
-            row.Children.Add(badge);
+            // A rare one's badge in a glowing gold edge (bright even while locked).
+            var badgeFrame = new Border
+            {
+                Child = badge,
+                Margin = new Thickness(0, 0, 12, 0),
+                VerticalAlignment = VerticalAlignment.Top,
+                CornerRadius = new CornerRadius(4),
+                BorderThickness = new Thickness(rare ? 2 : 0),
+                BorderBrush = rare ? Gold : null,
+            };
+            if (rare)
+                badgeFrame.Effect = new System.Windows.Media.Effects.DropShadowEffect
+                {
+                    Color = Color.FromRgb(0xFF, 0xC8, 0x4A),
+                    BlurRadius = 16,
+                    ShadowDepth = 0,
+                    Opacity = item.Unlocked ? 0.95 : 0.6,
+                };
+            DockPanel.SetDock(badgeFrame, Dock.Left);
+            row.Children.Add(badgeFrame);
+            // The words dimmed while locked (the badge's glow is not).
+            var dimmed = new DockPanel { Opacity = item.Unlocked ? 1.0 : 0.5 };
+            row.Children.Add(dimmed);
+            row = dimmed;
 
             if (item.Points > 0)
             {
@@ -448,14 +788,20 @@ namespace RomM.Overlay
 
             var words = new StackPanel();
             bool secret = item.Hidden && !item.Unlocked;
-            words.Children.Add(Words(secret ? "Hidden achievement" : item.Title ?? "", 15, FontWeights.SemiBold, Brushes.White));
+            var titleLine = Words(secret ? "Hidden achievement" : item.Title ?? "", 15, FontWeights.SemiBold, Brushes.White);
+            if (rare)
+                titleLine.Inlines.Add(new System.Windows.Documents.Run("   RARE") { FontSize = 11, Foreground = Gold, FontWeight = FontWeights.Bold });
+            words.Children.Add(titleLine);
             string detail = secret ? "Keep playing to discover this achievement." : item.Description ?? "";
             if (item.Unlocked && item.When.HasValue)
                 detail += (detail.Length > 0 ? "   ·   " : "") + "Unlocked " + item.When.Value.ToLocalTime().ToString("d MMM yyyy");
+            // No points (Steam's): how many players have it instead.
+            if (item.Points <= 0 && item.Rarity.HasValue)
+                detail += (detail.Length > 0 ? "   ·   " : "") + $"{item.Rarity.Value:0.#}% of players";
             if (detail.Length > 0)
                 words.Children.Add(Words(detail, 13, FontWeights.Normal, Muted));
             row.Children.Add(words);
-            return row;
+            return outer;
         }
 
         private static Border Card(UIElement child, Thickness margin) => new Border

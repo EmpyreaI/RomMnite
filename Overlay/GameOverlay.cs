@@ -2,6 +2,7 @@ using Playnite.SDK;
 using Playnite.SDK.Models;
 using RomM.Games;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -137,6 +138,10 @@ namespace RomM.Overlay
             _running = true;
             // Switch, PlayStation and other controllers XInput does not see (HidPads).
             HidPads.Begin();
+            // A controller connected now: its buttons in the prompts (until the keyboard is used);
+            // the keyboard and mouse themselves watched meanwhile.
+            InputActivity.Watch();
+            InputActivity.GameStarted();
             // Its volume as last set for it (else full), on its sound as it starts.
             _audio.Start(game.Id, IsGameProcess);
             // A Windows game in an ordinary window made borderless, when chosen in the settings.
@@ -172,16 +177,18 @@ namespace RomM.Overlay
                     ShowFullscreenNote();
                     return;
                 }
-                // With a controller connected (any kind), its way first: the game was most likely
-                // started with the mouse, so the last input says little about what will be used.
+                // The controller's way while one is what is in use (connected as the game started,
+                // or plugged in or pressed since), the keyboard's otherwise, changing live as
+                // that does (InputActivity, ControllerGlyphs.Bind). The buttons are pictures.
                 string padOpens = PadOpens();
-                bool pad = padOpens != null && (InputActivity.ControllerInUse || ControllerConnected());
-                string message = pad ? $"{padOpens} to open the overlay, or Shift+Tab." : "Press Shift+Tab to open the overlay.";
-                if (pad && _guideTakenBy != null)
+                const string keys = "Press {Shift} + {Tab} to open the overlay.";
+                string message = padOpens == null ? keys : $"{padOpens} to open the overlay.";
+                if (padOpens != null && _guideTakenBy != null)
                     message += $" ({_guideTakenBy} has the Home button.)";
                 Toast.Show("Overlay ready", message,
                     glyph: "\uE7FC",
-                    screenOf: GameInFront() ? GetForegroundWindow() : IntPtr.Zero);
+                    screenOf: GameInFront() ? GetForegroundWindow() : IntPtr.Zero,
+                    keyboardMessage: keys);
             };
             hint.Start();
         }
@@ -216,6 +223,10 @@ namespace RomM.Overlay
         /// <summary>The button that opens the overlay: the setting's, or Start + Select when the Home button is taken.</summary>
         internal static string EffectiveButton(string chosen, IPlayniteAPI api) =>
             (chosen ?? "Guide") == "Guide" && GuideTakenBy(api) != null ? "BackStart" : (chosen ?? "Guide");
+
+        /// <summary>Where the emulators' own menus go this time, from the overlay's button (Setup.EmulatorMenus.For).</summary>
+        internal static Setup.EmulatorMenus.Place EmulatorMenuButton(string chosen, IPlayniteAPI api) =>
+            Setup.EmulatorMenus.For(chosen, GuideTakenBy(api) != null);
 
         private static bool GameBarTakesGuide()
         {
@@ -286,6 +297,7 @@ namespace RomM.Overlay
             HidPads.End();
             _audio.Stop();
             UnhookKeyboard();
+            InputActivity.StopWatching();
             CloseWindow();
             Resume();
             _game = null;
@@ -294,14 +306,132 @@ namespace RomM.Overlay
             _isPc = false;
         }
 
+        // ---- Streaming (Sunshine) ------------------------------------------------------------
+
+        // "End stream" in the overlay while Sunshine is streaming, unless Sunshine itself started
+        // the game (or Playnite): its "close app" would end those too. Looked at off the UI thread.
+        private void OfferEndStreamIfStreaming(OverlayWindow window)
+        {
+            var sunshine = _plugin.Sunshine;
+            if (sunshine == null || _plugin.Settings?.SunshineEnabled != true)
+                return;
+            int game = _processId;
+            System.Threading.Tasks.Task.Run(async () =>
+            {
+                bool? streaming = await sunshine.StreamingAsync().ConfigureAwait(false);
+                if (streaming != true)
+                    return;
+                string startedBy = SunshineAncestor(game) ?? SunshineAncestor(Process.GetCurrentProcess().Id);
+                if (startedBy != null)
+                {
+                    s_log.Info($"[Sunshine] Streaming, but \"End stream\" is not offered: {startedBy} started the game, and ending the stream would close it.");
+                    return;
+                }
+                Ui(() =>
+                {
+                    if (_window == window)
+                        window.OfferEndStream();
+                });
+            });
+        }
+
+        private void EndStream()
+        {
+            OverlayWindow window = _window;
+            var sunshine = _plugin.Sunshine;
+            if (window == null || sunshine == null)
+                return;
+            System.Threading.Tasks.Task.Run(async () =>
+            {
+                string problem = await sunshine.EndStreamAsync().ConfigureAwait(false);
+                if (problem != null)
+                    s_log.Warn($"[Sunshine] Could not end the stream: {problem}");
+                Ui(() => window.StreamEnded(problem));
+            });
+        }
+
+        // Sunshine as a parent of the process (up to a few levels), by name; null when not.
+        private static string SunshineAncestor(int processId)
+        {
+            if (processId <= 0)
+                return null;
+            Dictionary<int, KeyValuePair<int, string>> parents = ProcessParents();
+            int at = processId;
+            for (int depth = 0; depth < 12 && parents.TryGetValue(at, out var entry); depth++)
+            {
+                if (entry.Value.IndexOf("sunshine", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return entry.Value;
+                at = entry.Key;
+            }
+            return null;
+        }
+
+        // Every process: its parent's id and its own name.
+        private static Dictionary<int, KeyValuePair<int, string>> ProcessParents()
+        {
+            var all = new Dictionary<int, KeyValuePair<int, string>>();
+            IntPtr snapshot = CreateToolhelp32Snapshot(0x00000002, 0);   // TH32CS_SNAPPROCESS
+            if (snapshot == IntPtr.Zero || snapshot == new IntPtr(-1))
+                return all;
+            try
+            {
+                var entry = new ProcessEntry32 { Size = (uint)Marshal.SizeOf(typeof(ProcessEntry32)) };
+                if (!Process32First(snapshot, ref entry))
+                    return all;
+                do
+                {
+                    all[(int)entry.ProcessId] = new KeyValuePair<int, string>((int)entry.ParentProcessId, entry.ExeFile ?? "");
+                }
+                while (Process32Next(snapshot, ref entry));
+            }
+            finally
+            {
+                CloseHandle(snapshot);
+            }
+            // Its own entry: the parent of the process (keyed by the child) is looked up next.
+            var byChild = new Dictionary<int, KeyValuePair<int, string>>();
+            foreach (var pair in all)
+            {
+                int parent = pair.Value.Key;
+                string parentName = all.TryGetValue(parent, out var p) ? p.Value : "";
+                byChild[pair.Key] = new KeyValuePair<int, string>(parent, parentName);
+            }
+            return byChild;
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct ProcessEntry32
+        {
+            public uint Size;
+            public uint Usage;
+            public uint ProcessId;
+            public IntPtr DefaultHeapId;
+            public uint ModuleId;
+            public uint Threads;
+            public uint ParentProcessId;
+            public int PriorityClassBase;
+            public uint Flags;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+            public string ExeFile;
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, EntryPoint = "Process32FirstW")]
+        private static extern bool Process32First(IntPtr snapshot, ref ProcessEntry32 entry);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, EntryPoint = "Process32NextW")]
+        private static extern bool Process32Next(IntPtr snapshot, ref ProcessEntry32 entry);
+
         // How the controller opens it, in words, or null when it does not.
         private string PadOpens()
         {
             switch (_button)
             {
-                case "Guide": return _guideOpens ? "Press the Home button" : null;
-                case "BackStart": return "Hold Start + Select";
-                case "L3R3": return "Press both sticks in (L3 + R3)";
+                case "Guide": return _guideOpens ? "Press {Guide}" : null;
+                case "BackStart": return "Hold {Back} + {Start}";
+                case "L3R3": return "Press {L3} + {R3}";
                 default: return null;
             }
         }
@@ -368,6 +498,8 @@ namespace RomM.Overlay
                 _window = new OverlayWindow(_plugin, game, _startedUtc, Bounds(gameWindow), keepsRunning: _isPc, audio: _audio);
                 _window.ResumeRequested += CloseWindow;
                 _window.QuitRequested += Quit;
+                _window.EndStreamRequested += EndStream;
+                OfferEndStreamIfStreaming(_window);
                 _window.Closed += (s, e) =>
                 {
                     _window = null;
@@ -635,11 +767,13 @@ namespace RomM.Overlay
             var previous = new ushort[5];
             DateTime comboSince = DateTime.MaxValue;
             bool comboFired = false;
+            DateTime heldSince = DateTime.MaxValue, lastRepeat = DateTime.MinValue;
             while (_running)
             {
                 try
                 {
                     ushort all = 0, pressedAll = 0;
+                    ushort pressedXInput = 0;
                     for (uint i = 0; i < 4; i++)
                     {
                         XInputState state;
@@ -661,6 +795,7 @@ namespace RomM.Overlay
                             result = XInputGetState(i, out state);
                         }
                         ushort now = result == 0 ? state.Buttons : (ushort)0;
+                        pressedXInput |= (ushort)(now & ~previous[i]);
                         pressedAll |= (ushort)(now & ~previous[i]);
                         previous[i] = now;
                         all |= now;
@@ -669,13 +804,42 @@ namespace RomM.Overlay
                     ushort hid = HidPads.Buttons;
                     if (hid != previous[4] && hid != 0)
                         InputActivity.NotePad();
-                    pressedAll |= (ushort)(hid & ~previous[4]);
+                    ushort pressedHid = (ushort)(hid & ~previous[4]);
+                    pressedAll |= pressedHid;
                     previous[4] = hid;
                     all |= hid;
+                    // Whose buttons to show: the controller pressed last. One seen both ways
+                    // (Steam Input's virtual Xbox pad and the controller itself) is the controller.
+                    if (pressedXInput != 0)
+                    {
+                        // XInput's own presses (the Guide button too, which its packet number
+                        // does not show): the controller is what is in use.
+                        InputActivity.NotePad();
+                        ControllerGlyphs.Used(ControllerGlyphs.Family.Xbox);
+                    }
+                    if (pressedHid != 0)
+                        ControllerGlyphs.Used(HidPads.LastPressedFamily ?? ControllerGlyphs.Family.Xbox);
                     // One press, once: a controller seen both ways (Steam Input's virtual pad
                     // and the controller itself) is still one.
                     if (pressedAll != 0)
                         OnPressed(pressedAll);
+
+                    // Up or down held in the overlay's achievements: on to the next, again and again.
+                    int held = (all & DPadUp) != 0 ? -1 : (all & DPadDown) != 0 ? 1 : 0;
+                    if (held == 0 || _window == null)
+                        heldSince = DateTime.MaxValue;
+                    else if ((pressedAll & (DPadUp | DPadDown)) != 0)
+                    {
+                        heldSince = DateTime.UtcNow;
+                        lastRepeat = DateTime.UtcNow;
+                    }
+                    else if (heldSince != DateTime.MaxValue && DateTime.UtcNow - heldSince > TimeSpan.FromMilliseconds(400)
+                             && DateTime.UtcNow - lastRepeat > TimeSpan.FromMilliseconds(90))
+                    {
+                        lastRepeat = DateTime.UtcNow;
+                        int step = held;
+                        Ui(() => _window?.MoveHeld(step));
+                    }
 
                     // The chosen pair held together for half a second.
                     ushort pair = _button == "BackStart" ? (ushort)(PadBack | PadStart)
@@ -783,6 +947,7 @@ namespace RomM.Overlay
         private const int WH_KEYBOARD_LL = 13;
         private const int WM_KEYDOWN = 0x0100, WM_SYSKEYDOWN = 0x0104;
         private const int VK_TAB = 0x09, VK_SHIFT = 0x10;
+        private const uint LLKHF_INJECTED = 0x10;
 
         private void HookKeyboard()
         {
@@ -810,6 +975,10 @@ namespace RomM.Overlay
                 if (code >= 0 && ((int)message == WM_KEYDOWN || (int)message == WM_SYSKEYDOWN))
                 {
                     var info = (KeyboardInfo)Marshal.PtrToStructure(data, typeof(KeyboardInfo));
+                    // A key on the keyboard itself (not one a program made, as Steam Input does
+                    // from a controller): the keyboard's buttons in the prompts.
+                    if ((info.Flags & LLKHF_INJECTED) == 0)
+                        InputActivity.NoteKeyboard();
                     if (info.VirtualKey == VK_TAB && (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0 && (_window != null || GameInFront()))
                     {
                         Ui(Toggle);

@@ -22,7 +22,8 @@ namespace RomM.Store
     /// pages are right from the first look.
     ///
     /// The bar: the page's data 25%, the genres and series 25%, the pictures the rest, full at
-    /// half of them in.
+    /// half of them in. Under it, after a few seconds on screen, a line of encouragement
+    /// (LoadingCheer), as on the window's curtain while the library syncs.
     /// </summary>
     public partial class StoreView
     {
@@ -38,6 +39,8 @@ namespace RomM.Store
         private bool _categoriesReady;       // the genres and series counted (or nothing to count)
         private bool _liveTopReady;          // the anniversaries and game of the day laid out (StoreView.Live)
         private DateTime? _curtainSeenSince; // when the curtain was first on screen (the Store showing)
+        private TextBlock _curtainCheer;
+        private DateTime _curtainCheerAt;    // when its line last changed
 
         private void BuildCurtain(Grid root)
         {
@@ -58,6 +61,9 @@ namespace RomM.Store
             _curtainFill = new Border { Width = 0, HorizontalAlignment = HorizontalAlignment.Left, CornerRadius = new CornerRadius(2), Background = new SolidColorBrush(Color.FromRgb(0x1A, 0x9F, 0xFF)) };
             track.Child = _curtainFill;
             words.Children.Add(track);
+            _curtainCheer = LoadingCheer.Line(13);
+            _curtainCheer.Margin = new Thickness(0, 18, 0, 0);
+            words.Children.Add(_curtainCheer);
 
             _curtain = new Grid
             {
@@ -86,6 +92,7 @@ namespace RomM.Store
             _curtain.Opacity = 1;
             _curtain.Visibility = Visibility.Visible;
             _curtainFill.Width = 0;
+            LoadingCheer.Clear(_curtainCheer);
             _curtainText.Text = "Asking the server...";
             _curtainTimer.Start();
         }
@@ -136,6 +143,14 @@ namespace RomM.Store
             // (StoreView.Preload) never lifts the curtain on a half-loaded page.
             if (IsVisible && _curtainSeenSince == null)
                 _curtainSeenSince = DateTime.UtcNow;
+            // A few seconds on screen: a word of encouragement, then another every few.
+            if (_curtainSeenSince != null && IsVisible
+                && DateTime.UtcNow - _curtainSeenSince.Value >= LoadingCheer.After
+                && (string.IsNullOrEmpty(_curtainCheer.Text) || DateTime.UtcNow - _curtainCheerAt >= LoadingCheer.Every))
+            {
+                _curtainCheerAt = DateTime.UtcNow;
+                LoadingCheer.Next(_curtainCheer);
+            }
             bool waitedLongest = _curtainSeenSince != null && DateTime.UtcNow - _curtainSeenSince.Value > CurtainLongest;
             if (ready || waitedLongest)
                 LiftCurtain();

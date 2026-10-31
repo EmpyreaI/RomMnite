@@ -5,6 +5,7 @@ using RomM.Downloads;
 using RomM.Games;
 using RomM.Models.RomM.Platform;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
@@ -24,6 +25,8 @@ namespace RomM.Store
     ///   Add to Library    (Store only: not in this account's library yet)
     ///   Install           (Store: View in Library, which goes to the game's page there)
     ///   Downloading 42%   (pointed at: Cancel, and a Pause button slides out to its right)
+    ///   Update            (blue: the game changed on the server, Games/GameUpdates; its drop-down
+    ///                     has "Play without updating")
     ///   Play
     ///   Launching...      (from the click until the game has started)
     ///   Running
@@ -41,7 +44,7 @@ namespace RomM.Store
     /// </summary>
     public class GameActionButton : PluginUserControl
     {
-        private enum Kind { None, InstallEmulator, EmulatorUnsupported, EmulatorUnavailable, AddToLibrary, Install, Downloading, Uninstalling, Play, Launching, Running }
+        private enum Kind { None, InstallEmulator, EmulatorUnsupported, EmulatorUnavailable, AddToLibrary, Install, Downloading, Uninstalling, Update, Play, Launching, Running }
 
         private static readonly ILogger s_log = LogManager.GetLogger();
         private static readonly Color Green = Color.FromRgb(0x5C, 0x7E, 0x10);
@@ -87,6 +90,7 @@ namespace RomM.Store
         private bool _needsEmulator;
         private bool _noEmulator;      // needed, and none can be set up for the platform
         private bool _filesMissing;    // needed, and its setup lacks a file on the server
+        private bool _updateWaiting;   // installed, and changed on the server since (GameUpdates)
         private DateTime _emulatorCheckedAt = DateTime.MinValue;
 
         /// <summary>In the library: follows the selected game (GameContextChanged).</summary>
@@ -243,7 +247,8 @@ namespace RomM.Store
                     return Kind.None;
                 return _needsEmulator ? EmulatorKind() : Kind.AddToLibrary;
             }
-            if (game.IsInstalling)
+            // Installing, or its update downloading (which the game itself does not show).
+            if (game.IsInstalling || (game.IsInstalled && _plugin.DownloadQueueController?.Find(game.Id) != null))
                 return Kind.Downloading;
             if (game.IsUninstalling)
                 return Kind.Uninstalling;
@@ -253,6 +258,8 @@ namespace RomM.Store
                 return Kind.Launching;
             if (_needsEmulator)
                 return EmulatorKind();
+            if (game.IsInstalled && _updateWaiting)
+                return Kind.Update;
             return game.IsInstalled ? Kind.Play : Kind.Install;
         }
 
@@ -283,6 +290,8 @@ namespace RomM.Store
                     int platformId = _romId > 0 ? _platformId : game != null ? _plugin.PlatformIdOf(game) : 0;
                     _noEmulator = _needsEmulator && platformId > 0 && !_plugin.EmulatorAvailable(platformId);
                     _filesMissing = _needsEmulator && !_noEmulator && platformId > 0 && _plugin.FilesMissing(platformId) == true;
+                    // An update waiting (read from its record, so not twice a second).
+                    _updateWaiting = game != null && game.PluginId == _plugin.Id && _plugin.Updates?.Waiting(game) != null;
                 }
 
                 // The other platforms' copies, in the library (the Store lists them on its page).
@@ -376,6 +385,10 @@ namespace RomM.Store
                     color = Grey;
                     clickable = false;
                     break;
+                case Kind.Update:
+                    text = "Update";
+                    color = _hover ? BlueHover : Blue;
+                    break;
                 case Kind.Play:
                     text = "Play";
                     color = _hover ? GreenHover : Green;
@@ -392,7 +405,9 @@ namespace RomM.Store
             SlidePause(_over && canPause);
 
             // The drop-down: the button's own colour (a shade lighter pointed at), joined to it.
-            bool drop = _others > 0;
+            // Its other copies, and with an update waiting, playing without it.
+            bool drop = _others > 0 || _kind == Kind.Update;
+            _drop.ToolTip = _kind == Kind.Update ? "More options" : "Other platforms";
             _drop.Visibility = drop ? Visibility.Visible : Visibility.Collapsed;
             if (drop)
             {
@@ -429,7 +444,7 @@ namespace RomM.Store
                 {
                     if (_pauseShown)
                         return;
-                    _box.CornerRadius = _others > 0 ? new CornerRadius(2, 0, 0, 2) : new CornerRadius(2);
+                    _box.CornerRadius = _others > 0 || _kind == Kind.Update ? new CornerRadius(2, 0, 0, 2) : new CornerRadius(2);
                     _box.MinWidth = 150;
                 };
             }
@@ -440,10 +455,21 @@ namespace RomM.Store
         private void OpenVersions()
         {
             Game game = _gameId == Guid.Empty ? null : _plugin.Playnite.Database.Games.Get(_gameId);
-            if (game == null || _plugin.Versions == null)
+            if (game == null)
                 return;
             var menu = new ContextMenu { PlacementTarget = _drop, Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom };
-            foreach (Game other in _plugin.Versions.Others(game))
+            if (_kind == Kind.Update)
+            {
+                var words = new StackPanel();
+                words.Children.Add(new TextBlock { Text = "Play without updating", FontWeight = FontWeights.SemiBold });
+                words.Children.Add(new TextBlock { Text = _plugin.Updates?.Waiting(game) ?? "The update waits until next time", FontSize = 11, Opacity = 0.7 });
+                var play = new MenuItem { Header = words };
+                play.Click += (s, e) => PlayWithoutUpdating(game);
+                menu.Items.Add(play);
+                if (_others > 0)
+                    menu.Items.Add(new Separator());
+            }
+            foreach (Game other in _plugin.Versions?.Others(game) ?? new List<Game>())
             {
                 string platform = other.Platforms?.FirstOrDefault()?.Name ?? "Other platform";
                 string action;
@@ -484,6 +510,25 @@ namespace RomM.Store
             }
             if (menu.Items.Count > 0)
                 menu.IsOpen = true;
+        }
+
+        // The game started as it is, its update left waiting (the second time, asked whether to
+        // stop checking it for updates: GameUpdates.PlayWithoutUpdating).
+        private void PlayWithoutUpdating(Game game)
+        {
+            try
+            {
+                _plugin.Updates?.PlayWithoutUpdating(game);
+                _plugin.MarkLaunching(game.Id);
+                Refresh(false);
+                _plugin.Playnite.StartGame(game.Id);
+                _plugin.ReleaseIfNotStarted(game.Id);
+            }
+            catch (Exception ex)
+            {
+                s_log.Warn($"[GameActionButton] Could not start {game.Name} without updating: {ex.Message}");
+                Refresh(true);
+            }
         }
 
         private static string DownloadText(DownloadQueueItem item)
@@ -552,6 +597,14 @@ namespace RomM.Store
                         if (game != null && _plugin.DownloadQueueController?.Find(game.Id) != null)
                             _plugin.DownloadQueueController.Cancel(game.Id);
                         Refresh(false);
+                        break;
+                    case Kind.Update:
+                        if (game != null)
+                        {
+                            _plugin.Updates?.Start(game, verify: false);
+                            _updateWaiting = false;   // downloading now; read again with the next full look
+                        }
+                        Refresh(true);
                         break;
                     case Kind.Play:
                         if (game != null)

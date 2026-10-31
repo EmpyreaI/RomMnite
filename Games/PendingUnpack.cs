@@ -24,7 +24,9 @@ namespace RomM.Games
         private static readonly string[] ArchiveExtensions = { ".zip", ".7z", ".rar", ".tar", ".gz", ".tgz", ".bz2", ".tbz2", ".xz", ".txz" };
 
         public static bool LooksLikeArchive(string path) =>
-            !string.IsNullOrEmpty(path) && ArchiveExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase);
+            // A command line rather than a path (quotes, a pipe ...) is not one, and is not a path to ask about.
+            !string.IsNullOrEmpty(path) && path.IndexOfAny(Path.GetInvalidPathChars()) < 0
+            && ArchiveExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
         /// Whether a file is a whole archive: it opens and lists its files. A download cut short

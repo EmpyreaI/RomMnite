@@ -19,7 +19,8 @@ namespace RomM.Account
     ///
     /// It also covers the window while the library is being brought in step with the server
     /// (BeginBusy / EndBusy: after a sign-in, during a library update), with the logo turning
-    /// and a line saying what is going on, so the wait does not look like a hang.
+    /// and a line saying what is going on, so the wait does not look like a hang. When the wait
+    /// runs past a few seconds, a second, lighter line turns through a few words of encouragement.
     /// </summary>
     public static class SignedOutCurtain
     {
@@ -29,6 +30,12 @@ namespace RomM.Account
         private static int s_busy;          // syncs under way
         private static string s_caption = "";
         private static System.Windows.Threading.DispatcherTimer s_failsafe;
+
+        private static System.Windows.Threading.DispatcherTimer s_cheerTimer;
+        private static DateTime s_busySince;
+
+        /// <summary>A sync has the window covered (any thread; a moment behind BeginBusy from another thread).</summary>
+        public static bool Busy => System.Threading.Volatile.Read(ref s_busy) > 0;
 
         private sealed class Cover : Adorner
         {
@@ -44,6 +51,7 @@ namespace RomM.Account
             public Grid Content => _content;
             public RotateTransform Spin;
             public TextBlock Caption;
+            public TextBlock Cheer;
             protected override int VisualChildrenCount => 1;
             protected override Visual GetVisualChild(int index) => _content;
 
@@ -82,6 +90,8 @@ namespace RomM.Account
         {
             OnUi(() =>
             {
+                if (s_busy == 0)
+                    s_busySince = DateTime.UtcNow;
                 s_busy++;
                 s_caption = caption ?? "";
                 if (s_failsafe == null)
@@ -145,6 +155,7 @@ namespace RomM.Account
                 cover.Caption.Text = busy ? s_caption : "";
                 cover.Caption.Visibility = busy && s_caption.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
             }
+            Cheer(cover, busy);
             if (cover.Spin != null)
             {
                 if (busy)
@@ -158,6 +169,42 @@ namespace RomM.Account
                     cover.Spin.BeginAnimation(RotateTransform.AngleProperty, null);
                     cover.Spin.Angle = 0;
                 }
+            }
+        }
+
+        // The encouragement line (LoadingCheer): hidden until the wait is a few seconds long, then
+        // a new line every few seconds.
+        private static void Cheer(Cover cover, bool busy)
+        {
+            if (cover.Cheer == null)
+                return;
+            if (!busy)
+            {
+                s_cheerTimer?.Stop();
+                global::RomM.Store.LoadingCheer.Clear(cover.Cheer);
+                return;
+            }
+            if (s_cheerTimer == null)
+            {
+                s_cheerTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+                s_cheerTimer.Tick += (s, e) =>
+                {
+                    Cover now = s_cover;
+                    if (now?.Cheer == null || s_busy == 0 || s_wanted)
+                    {
+                        s_cheerTimer.Stop();
+                        return;
+                    }
+                    if (DateTime.UtcNow - s_busySince < global::RomM.Store.LoadingCheer.After)
+                        return;
+                    s_cheerTimer.Interval = global::RomM.Store.LoadingCheer.Every;
+                    global::RomM.Store.LoadingCheer.Next(now.Cheer);
+                };
+            }
+            if (!s_cheerTimer.IsEnabled)
+            {
+                s_cheerTimer.Interval = TimeSpan.FromMilliseconds(250);
+                s_cheerTimer.Start();
             }
         }
 
@@ -269,7 +316,10 @@ namespace RomM.Account
                 s_log.Warn($"[Account] Could not load the logo: {ex.Message}");
             }
             column.Children.Add(caption);
-            return new Cover(root, grid) { Spin = spin, Caption = caption };
+            var cheer = global::RomM.Store.LoadingCheer.Line(13);
+            cheer.Margin = new Thickness(0, 10, 0, 0);
+            column.Children.Add(cheer);
+            return new Cover(root, grid) { Spin = spin, Caption = caption, Cheer = cheer };
         }
     }
 }

@@ -317,7 +317,7 @@
                     <Label Content="RomMnite" Style="{StaticResource SectionHeader}" />
                     <Separator Margin="0,4,0,10" />
                     <TextBlock TextWrapping="Wrap" Margin="0,0,0,8" Opacity="0.8"
-                               Text="Achievements, RetroAchievements sign-in, videos and streaming with Sunshine are in Playnite's Settings, under RomMnite." />
+                               Text="Games, graphics, achievements, the in-game overlay and streaming are in Playnite's Settings, under RomMnite." />
                     <Button HorizontalAlignment="Left" Content="Open RomMnite settings" Padding="10,2" Margin="0,0,0,8" Click="Click_OpenRomMnitePage" />
                 </StackPanel>
             </ScrollViewer>

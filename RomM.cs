@@ -118,6 +118,9 @@ namespace RomM
         public MetadataProperty Source { get; private set; }
 
         public DownloadQueueController DownloadQueueController { get; private set; }
+
+        /// <summary>Installed games' updates from the server: told at library updates, fetched in part.</summary>
+        public GameUpdates Updates { get; private set; }
         internal RomMDownloadsSidebarItem DownloadsSidebar { get; private set; }
         private readonly DownloadQueueViewModel downloadsVm;
 
@@ -290,6 +293,7 @@ namespace RomM
             SaveSyncOff = new SaveSyncOptOut(Path.Combine(Playnite.Paths.ExtensionsDataPath, Id.ToString()));
             SaveAccounts = new SaveAccounts(this, Path.Combine(Playnite.Paths.ExtensionsDataPath, Id.ToString()));
             EmulatorAchievements = new EmulatorAchievements(this, Path.Combine(Playnite.Paths.ExtensionsDataPath, Id.ToString()));
+            Updates = new GameUpdates(this, Path.Combine(Playnite.Paths.ExtensionsDataPath, Id.ToString()));
             ArtCache = new LibraryArtCache(this, Path.Combine(Playnite.Paths.ExtensionsDataPath, Id.ToString()));
             // The community's controller list: handed to the SDL emulators Playnite starts, and read
             // by the library's Controller section; fetched in the background when missing or old.
@@ -533,6 +537,8 @@ namespace RomM
         {
             base.OnApplicationStarted(args);
             Versions?.Start();
+            // The installed games' sizes on disk, once things have settled (InstallFootprint).
+            Task.Delay(TimeSpan.FromSeconds(45)).ContinueWith(_ => InstallFootprint.RefreshAll(Playnite, Id, CancellationToken.None));
             // Windows signing out or shutting down: no question then (FinishBeforeQuit).
             try
             {
@@ -672,6 +678,8 @@ namespace RomM
                     {
                         System.Windows.Application.Current.MainWindow.PreviewKeyDown += OnMainWindowPreviewKeyDown;
                         System.Windows.Application.Current.MainWindow.PreviewMouseUp += OnMainWindowPreviewMouseUp;
+                        // The window's bar moves the window, as a title bar does.
+                        Account.WindowDrag.Install(System.Windows.Application.Current.MainWindow);
                     }
                 }));
                 System.Windows.Application.Current?.Dispatcher?.BeginInvoke(
@@ -772,6 +780,9 @@ namespace RomM
             FinishBeforeQuit();
 
             Playnite.Database.Games.ItemUpdated -= OnItemUpdated;
+
+            // Theme files Playnite had open at start-up (Setup.ThemeInstaller).
+            Setup.ThemeInstaller.FinishInUse();
 
             // Portable path fix: restore "{PlayniteDir}" tokens before exiting
             if (Playnite.Paths.IsPortable)
@@ -996,7 +1007,9 @@ namespace RomM
             {
                 var data = LoadGameData(game);
                 var revision = data?.ROMVersions?.FirstOrDefault(r => r.IsSelected) ?? data?.ROMVersions?.FirstOrDefault();
-                if (revision == null || mapping == null || !mapping.AutoExtract)
+                // As the install decides (RomMInstallController): a Windows game is always unpacked.
+                bool windows = global::RomM.Setup.EmulatorSetup.IsWindowsPlatform(mapping?.RomMPlatform);
+                if (revision == null || mapping == null || !(mapping.AutoExtract || windows))
                     return false;
                 string ext = revision.DownloadAsArchive ? ".zip" : Path.GetExtension(revision.FileName ?? "");
                 return new[] { ".zip", ".7z", ".rar", ".tar", ".gz", ".tgz", ".bz2", ".tbz2", ".xz", ".txz" }
@@ -2285,6 +2298,92 @@ namespace RomM
             }
         }
 
+        private readonly HashSet<int> _bringInTried = new HashSet<int>();
+        private int _bringingIn;
+
+        /// <summary>
+        /// Games in the signed-in account's library on the server that were never brought into
+        /// Playnite on this computer (an account signed in here for the first time in a while, or
+        /// games added on another computer): imported now, as "Add to Library" does, in the
+        /// background, one at a time, then the library synced again so they are on their shelves
+        /// (CollectionSync). Each is tried once per run of Playnite, so one that cannot come in is
+        /// not tried over and over.
+        ///
+        /// While the window is covered for a library sync (after a sign-in), it stays covered
+        /// until these are in too, so games do not pop in and shift the library once it shows. The
+        /// pictures do not hold it: the games come in as names, their pictures fetched after.
+        /// </summary>
+        internal void BringInLibraryGames(IEnumerable<int> romIds)
+        {
+            List<int> todo;
+            lock (_bringInTried)
+            {
+                todo = romIds.Where(id => _bringInTried.Add(id)).ToList();
+            }
+            if (todo.Count == 0 || Interlocked.CompareExchange(ref _bringingIn, 1, 0) != 0)
+                return;
+            // Called from within the covered sync, before it uncovers: this keeps it covered.
+            bool covered = Account.SignedOutCurtain.Busy;
+            if (covered)
+                Account.SignedOutCurtain.BeginBusy(todo.Count == 1 ? "Adding a game to your library..." : $"Adding {todo.Count} games to your library...");
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                int added = 0;
+                var art = new List<RomMImport.LaterArt>();
+                try
+                {
+                    try
+                    {
+                        var controller = new RomMImportController(this);
+                        foreach (int romId in todo)
+                        {
+                            string problem = controller.ImportSingle(romId, CancellationToken.None, art);
+                            if (problem == null)
+                                added++;
+                            else
+                                Logger.Info($"[Library] Library game {romId} not brought in: {problem}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Warn($"[Library] Could not bring in the account's library games: {ex.Message}");
+                    }
+                    finally
+                    {
+                        Interlocked.Exchange(ref _bringingIn, 0);
+                    }
+                    if (added > 0)
+                    {
+                        Logger.Info($"[Library] Brought in {added} game(s) of the account's library that were not on this computer.");
+                        // Onto their shelves and collections, with their play time, before the
+                        // window uncovers.
+                        try
+                        {
+                            CollectionsSync.Run();
+                            UserData.Run();
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.Warn($"[Sync] {ex.Message}");
+                        }
+                    }
+                }
+                finally
+                {
+                    if (covered)
+                        Account.SignedOutCurtain.EndBusy();
+                }
+
+                // Now the pictures, the library showing.
+                if (art.Count > 0)
+                {
+                    var started = DateTime.UtcNow;
+                    RomMImport.FetchArt(this, art, CancellationToken.None);
+                    Logger.Info($"[Library] Pictures fetched for {art.Count} game(s) brought in ({(DateTime.UtcNow - started).TotalSeconds:0.0} s).");
+                }
+            });
+        }
+
         /// <summary>
         /// A game just added to the library: its cloud saves brought down (or up) now, when they
         /// can be: cloud saves on for it, its emulator set up, and no other account's save in the
@@ -2745,6 +2844,9 @@ namespace RomM
         internal void UninstallPlatform(RomMPlatform platform)
         {
             var dialogs = Playnite.Dialogs;
+            // Windows is not a platform to take off this computer (its menu does not offer it).
+            if (platform == null || Setup.EmulatorSetup.IsWindowsPlatform(platform))
+                return;
             try
             {
                 EmulatorMapping mapping = MappingForPlatform(platform.Id);
@@ -3238,6 +3340,29 @@ namespace RomM
                     });
                 }
 
+                // An update on the server, and checking the game's files against it (Steam's
+                // "Verify integrity of game files").
+                if (game.IsInstalled && args.Games.Count == 1 && Updates?.Get(game.Id) != null)
+                {
+                    string waiting = Updates.Waiting(game);
+                    Game updating = game;
+                    if (waiting != null)
+                    {
+                        gameMenuItems.Add(new GameMenuItem
+                        {
+                            Description = $"Update ({waiting})",
+                            MenuSection = LibraryHome.LibraryHomeView.ManageHeader,
+                            Action = (_) => Updates.Start(updating, verify: false),
+                        });
+                    }
+                    gameMenuItems.Add(new GameMenuItem
+                    {
+                        Description = "Verify and repair files",
+                        MenuSection = LibraryHome.LibraryHomeView.ManageHeader,
+                        Action = (_) => Updates.Start(updating, verify: true),
+                    });
+                }
+
                 // The game's whole platform off this computer: its games and its emulator.
                 RomMPlatform menuPlatform = KnownPlatformOf(game);
 
@@ -3255,7 +3380,9 @@ namespace RomM
                         Action = (_) => ReinstallEmulator(menuPlatform),
                     });
                 }
-                if (menuPlatform != null && MappingForPlatform(menuPlatform.Id) != null)
+                // Not Windows: it is no emulator, and taking it off would uninstall every PC game.
+                if (menuPlatform != null && MappingForPlatform(menuPlatform.Id) != null
+                    && !Setup.EmulatorSetup.IsWindowsPlatform(menuPlatform))
                 {
                     gameMenuItems.Add(new GameMenuItem
                     {
@@ -3267,6 +3394,18 @@ namespace RomM
 
                 // Cloud saves, on unless switched off here (ticked when on for all the chosen games).
                 List<Game> ours = args.Games.Where(g => g.PluginId == PluginId).ToList();
+
+                // Updates from the server, likewise.
+                bool updatesOn = Updates != null && ours.All(Updates.IsOn);
+                if (Updates != null)
+                {
+                    gameMenuItems.Add(new GameMenuItem
+                    {
+                        Description = (updatesOn ? "\u2713 " : "") + "Check for updates",
+                        MenuSection = LibraryHome.LibraryHomeView.SyncSection,
+                        Action = (_) => Updates.Set(ours, !updatesOn),
+                    });
+                }
                 bool savesOn = ours.All(SaveSyncOff.IsOn);
                 gameMenuItems.Add(new GameMenuItem
                 {
@@ -3603,15 +3742,12 @@ namespace RomM
                 SaveEmulatorResolution launching = SaveSync.EmulatorFor(game);
                 if (launching?.Emulator != null)
                 {
-                    // The emulator's own menu on Start + Select, unless the overlay is on those
-                    // buttons itself (Back + Start), which would open both.
-                    // The button the overlay opens with this time: Start + Select when Steam, the
-                    // Xbox Game Bar or Playnite has the Home button (Overlay.GameOverlay).
-                    string overlayButton = Overlay.GameOverlay.EffectiveButton(Settings?.OverlayButton ?? "Guide", Playnite);
-                    bool menus = Settings?.EmulatorMenusOnStartSelect != false && overlayButton != "BackStart";
-                    Setup.EmulatorLaunch.PrepareSettings(launching.Emulator, PlaynitePath.Resolve(Playnite, launching.Emulator.InstallDir),
-                        menus, overlayButton == "Guide", overlayButton == "BackStart",
-                        Settings?.EmulatorsAtDisplayResolution != false, Path.Combine(GetPluginUserDataPath(), "EmulatorUpscale.txt"));
+                    // The emulator's own menu on whichever button the overlay leaves free this
+                    // time: the overlay moves to Start + Select when Steam, the Xbox Game Bar or
+                    // Playnite has the Home button (Setup.EmulatorMenus.For).
+                    Setup.EmulatorMenus.Place menus = Overlay.GameOverlay.EmulatorMenuButton(Settings?.OverlayButton ?? "Guide", Playnite);
+                    Setup.EmulatorLaunch.PrepareSettings(launching.Emulator, PlaynitePath.Resolve(Playnite, launching.Emulator.InstallDir), menus,
+                        Settings?.Graphics() ?? new Setup.GraphicsChoice());
                 }
             }
             catch (Exception ex)
@@ -3821,6 +3957,9 @@ namespace RomM
                 game.InstallDirectory = unpackTo;
             Playnite.Database.Games.Update(game);
             Logger.Info($"[Unpack] {game.Name} unpacked; starts from {string.Join(", ", launch.Select(Path.GetFileName))}.");
+            // Its size now: what it unpacked to, not the archive's.
+            Guid unpacked = game.Id;
+            Task.Run(() => InstallFootprint.Update(Playnite, unpacked));
             return true;
         }
 

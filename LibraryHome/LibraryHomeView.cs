@@ -57,9 +57,10 @@ namespace RomM.LibraryHome
         private const double RecentHeight = 210;
         private const double Gap = 14;
         // All Games: a little larger than the shelves' covers, and further apart.
-        private const double AllWidth = 190;
-        private const double AllHeight = 285;
-        private const double AllGap = 22;
+        private const double AllWidth = 235;
+        private const double AllHeight = 352;
+        private const double AllGap = 30;
+        private const int AllColumns = 8;
         // Room around a sideways row, so a cover growing under the pointer is not cut off.
         private static readonly Thickness LiftRoom = new Thickness(6, 8, 6, 2);
         private const int MaxAllGames = 600;
@@ -292,14 +293,7 @@ namespace RomM.LibraryHome
             if (_whatsNew == null)
                 return;
             _whatsNew.Children.Clear();
-            // Today's birthdays lead, then anniversaries coming up, then everything else, newest first.
-            DateTime today = DateTime.Now.Date;
-            var news = _steamNews.Concat(_serverNews).Concat(WhatsNew(games))
-                .OrderByDescending(n => n.Years > 0 && n.When.Date == today)
-                .ThenByDescending(n => n.Upcoming)
-                .ThenByDescending(n => n.When)
-                .Take(24)
-                .ToList();
+            var news = Arrange(_steamNews.Concat(_serverNews).Concat(WhatsNew(games)).ToList(), VisibleNewsCards()).Take(24).ToList();
             if (news.Count == 0)
                 return;
             var newsRow = new StackPanel { Orientation = Orientation.Horizontal };
@@ -307,6 +301,41 @@ namespace RomM.LibraryHome
                 newsRow.Children.Add(card);
             UIElement newsShelf = SideScroll.RowWithHeaderArrows(newsRow, out FrameworkElement newsArrows);
             AddShelf("What's New", null, null, newsShelf, newsArrows, _whatsNew);
+        }
+
+        /// <summary>
+        /// What's New in order: today's birthdays, then at most two anniversaries coming up
+        /// (soonest first), then this week's news, newest first; then the rest. More than two
+        /// anniversaries come up front only when this week's news (Steam posts and the library's
+        /// own) is too little to fill the cards seen before scrolling; the others follow it.
+        /// </summary>
+        private static List<NewsItem> Arrange(List<NewsItem> all, int visible)
+        {
+            DateTime today = DateTime.Now.Date;
+            var birthdays = all.Where(n => n.Years > 0 && n.When.Date == today).ToList();
+            var upcoming = all.Where(n => n.Upcoming && !birthdays.Contains(n)).OrderBy(n => n.When).ToList();
+            var others = all.Where(n => !n.Upcoming && !birthdays.Contains(n)).OrderByDescending(n => n.When).ToList();
+            var thisWeek = others.Where(n => n.When >= today.AddDays(-7)).ToList();
+            var older = others.Skip(thisWeek.Count).ToList();
+
+            int allowed = Math.Max(2, visible - birthdays.Count - thisWeek.Count);
+
+            return birthdays
+                .Concat(upcoming.Take(allowed))
+                .Concat(thisWeek)
+                .Concat(upcoming.Skip(allowed))
+                .Concat(older)
+                .ToList();
+        }
+
+        // How many What's New cards fit across before scrolling (260 wide with the gap); five
+        // before the page has a width.
+        private int VisibleNewsCards()
+        {
+            double width = ActualWidth > 0 ? ActualWidth : 0;
+            if (width <= 0)
+                return 5;
+            return Math.Max(2, (int)((width + Gap) / (260 + Gap)));
         }
 
         /// <summary>

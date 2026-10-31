@@ -31,5 +31,26 @@ namespace RomM.Downloads
         public long DownloadedSize { get; set; }
         public Action OnCanceled { get; set; }
         public Action<Exception> OnFailed { get; set; }
+
+        /// <summary>
+        /// The files of the zip downloaded, read before it was unpacked (name, CRC-32, size), for
+        /// telling an update's changed files later (Games.GameUpdates); null when it was not one.
+        /// </summary>
+        public List<Games.InstalledManifest.ZipEntryRecord> ArchiveEntries { get; set; }
+
+        /// <summary>Whether the download was unpacked into <see cref="InstallDir"/> (and deleted).</summary>
+        public bool Extracted { get; set; }
+
+        /// <summary>
+        /// Work done in place of the usual download and unpacking (an update: Games.GameUpdates),
+        /// with the queue's entry to report progress on. <see cref="OnInstalled"/> is not called.
+        /// </summary>
+        public Func<DownloadQueueItem, System.Threading.CancellationToken, System.Threading.Tasks.Task> Work { get; set; }
+
+        /// <summary>
+        /// Leaves the install folder alone when cancelled or failed (an update of a game already
+        /// installed): only what <see cref="Work"/> itself made is cleaned up, by it.
+        /// </summary>
+        public bool KeepInstallOnFailure { get; set; }
     }
 }

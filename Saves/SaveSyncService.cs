@@ -506,7 +506,8 @@ namespace RomM.Saves
                     FileName = target.FileName,
                     Slot = target.Slot,
                     Emulator = target.EmulatorTag,
-                    ContentHash = target.ContentHash(),
+                    // A save sent trimmed (SaveTrim): reported as what RomM holds, while unchanged here.
+                    ContentHash = Trims.AsSent(romId, target.ContentHash()),
                     UpdatedAt = target.UpdatedAtUtc,
                     FileSizeBytes = target.SizeBytes,
                 });
@@ -595,6 +596,9 @@ namespace RomM.Saves
             {
                 Logger.Error(ex, $"[SaveSync] Operation '{op.Action}' failed for save {op.SaveId} (rom {op.RomId}).");
                 outcome.Failed++;
+                outcome.Message = ex is HttpRequestException || ex is WebException
+                    ? null   // the server: "could not be reached"
+                    : $"The {op.Action.ToString().ToLowerInvariant()} failed: {ex.Message}";
             }
         }
 
@@ -634,6 +638,13 @@ namespace RomM.Saves
                 {
                     Logger.Info($"[SaveSync] {game.Name}: no local save, and RomM has none to restore " +
                                 $"({saves.Count} listed for this game in slot \"{target.Slot}\").");
+                    // Nothing was synced: said so, rather than "Up to date" (unless the save
+                    // itself has said something more particular).
+                    if (string.IsNullOrEmpty(outcome.StatusHeadline))
+                    {
+                        outcome.StatusHeadline = "No saves yet";
+                        outcome.StatusDetail = "No save for this game was found on this computer, and RomM has none.";
+                    }
                     return;
                 }
 
@@ -689,32 +700,92 @@ namespace RomM.Saves
             }
 
             using (var prepared = target.PrepareUpload())
-            using (var content = BuildSaveContent(prepared))
             {
-                HttpResponseMessage response;
+                string method, url;
                 if (op.SaveId.HasValue)
                 {
-                    var url = RomMUrl.Combine(Settings.RomMHost,
+                    method = "PUT";
+                    url = RomMUrl.Combine(Settings.RomMHost,
                         $"api/saves/{op.SaveId.Value}?device_id={WebUtility.UrlEncode(deviceId)}");
-                    response = HttpClientSingleton.Instance.PutAsync(url, content, ct).GetAwaiter().GetResult();
                 }
                 else
                 {
-                    var url = RomMUrl.Combine(Settings.RomMHost,
+                    method = "POST";
+                    url = RomMUrl.Combine(Settings.RomMHost,
                         $"api/saves?rom_id={op.RomId}&emulator={WebUtility.UrlEncode(target.EmulatorTag)}" +
                         $"&slot={WebUtility.UrlEncode(target.Slot)}" +
                         $"&device_id={WebUtility.UrlEncode(deviceId)}&session_id={sessionId}");
-                    response = HttpClientSingleton.Instance.PostAsync(url, content, ct).GetAwaiter().GetResult();
                 }
 
-                using (response)
+                // Over the server's limit (known from an earlier refusal, or learned from this
+                // one): the oldest save slots left out of the copy sent (SaveTrim).
+                string host = Settings.RomMHost ?? "";
+                long limit = Trims.LimitFor(host);
+                long length = new FileInfo(prepared.FilePath).Length;
+                string trimmed = null;
+                try
                 {
-                    response.EnsureSuccessStatusCode();
+                    if (limit > 0 && length + (64L << 10) > limit)
+                        trimmed = TrimForLimit(prepared, limit, target);
+                    try
+                    {
+                        SendSaveFile(method, url, trimmed ?? prepared.FilePath, prepared.FileName, ct);
+                    }
+                    catch (SaveTooLargeException tooLarge) when (trimmed == null && tooLarge.Limit.HasValue)
+                    {
+                        Trims.SetLimit(host, tooLarge.Limit.Value);
+                        trimmed = TrimForLimit(prepared, tooLarge.Limit.Value, target);
+                        SendSaveFile(method, url, trimmed, prepared.FileName, ct);
+                    }
+
+                    // What was sent, for negotiate to report while the save here is unchanged:
+                    // the trimmed copy's digest, or (sent whole) none.
+                    if (trimmed != null)
+                        Trims.Remember(op.RomId, target.ContentHash(), SaveFileHash.ZipHexFile(trimmed));
+                    else
+                        Trims.Forget(op.RomId);
+                }
+                finally
+                {
+                    if (trimmed != null)
+                    {
+                        try { File.Delete(trimmed); } catch { }
+                    }
                 }
             }
 
             return true;
         }
+
+        // The save without its oldest slots, small enough for the limit; throws when it can't be.
+        private string TrimForLimit(PreparedUpload prepared, long limit, SaveTarget target)
+        {
+            long length = new FileInfo(prepared.FilePath).Length;
+            if (!prepared.FilePath.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"The save is {length / (1024 * 1024)} MB, over RomM's limit of {limit / (1024 * 1024)} MB, and is one file.");
+            string trimmed = SaveTrim.Trim(prepared.FilePath, limit, out string summary, out string problem);
+            if (trimmed == null)
+                throw new InvalidOperationException($"The save is {length / (1024 * 1024)} MB, over RomM's limit of {limit / (1024 * 1024)} MB, " +
+                                                    $"and can't be made to fit: {problem}.");
+            Logger.Info($"[SaveSync] {Path.GetFileNameWithoutExtension(prepared.FileName)}: over RomM's limit of {limit / (1024 * 1024)} MB, so {summary}. The saves on this computer are all kept.");
+            return trimmed;
+        }
+
+        /// <summary>The server's answer to a save over its upload limit (HTTP 413), with the limit when it says.</summary>
+        private sealed class SaveTooLargeException : InvalidOperationException
+        {
+            public SaveTooLargeException(string message, long? limit) : base(message)
+            {
+                Limit = limit;
+            }
+
+            public long? Limit { get; }
+        }
+
+        private SaveTrimStore _trims;
+
+        private SaveTrimStore Trims => _trims ?? (_trims = new SaveTrimStore(
+            Path.Combine(_romM.Playnite.Paths.ExtensionsDataPath, _romM.Id.ToString(), "SaveTrims.json")));
 
         private bool Download(RomMSyncOperation op, string deviceId, int sessionId, SaveTarget target, CancellationToken ct)
         {
@@ -764,14 +835,81 @@ namespace RomM.Saves
             }
         }
 
-        private static HttpContent BuildSaveContent(PreparedUpload upload)
+        /// <summary>
+        /// Sends the save as the form RomM takes ("saveFile"), read from disk as it goes. Not
+        /// through HttpClient: on .NET Framework it can hold the whole body in memory first, and
+        /// a large save (Cyberpunk's, a few hundred MB) does not fit in 32-bit Playnite's memory.
+        /// Here the length is told up front and the request is not buffered.
+        /// </summary>
+        private static void SendSaveFile(string method, string url, string filePath, string fileName, CancellationToken ct)
         {
-            var fileContent = new ByteArrayContent(File.ReadAllBytes(upload.FilePath));
-            fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+            string boundary = "----RomMnite" + Guid.NewGuid().ToString("N");
+            string name = (fileName ?? "save").Replace("\"", "_").Replace("\r", "").Replace("\n", "");
+            byte[] head = Encoding.UTF8.GetBytes($"--{boundary}\r\nContent-Disposition: form-data; name=\"saveFile\"; filename=\"{name}\"\r\n" +
+                                                 "Content-Type: application/octet-stream\r\n\r\n");
+            byte[] tail = Encoding.UTF8.GetBytes($"\r\n--{boundary}--\r\n");
+            long length = new FileInfo(filePath).Length;
 
-            var form = new MultipartFormDataContent();
-            form.Add(fileContent, "saveFile", upload.FileName);
-            return form;
+            var request = (HttpWebRequest)WebRequest.Create(url);
+            request.Method = method;
+            request.ContentType = "multipart/form-data; boundary=" + boundary;
+            request.ContentLength = head.Length + length + tail.Length;
+            request.AllowWriteStreamBuffering = false;
+            request.SendChunked = false;
+            request.Accept = "application/json";
+            request.Timeout = (int)TimeSpan.FromMinutes(2).TotalMilliseconds;
+            request.ReadWriteTimeout = (int)TimeSpan.FromMinutes(5).TotalMilliseconds;
+            AuthenticationHeaderValue auth = HttpClientSingleton.Instance.DefaultRequestHeaders.Authorization;
+            if (auth != null)
+                request.Headers[HttpRequestHeader.Authorization] = auth.ToString();
+
+            using (ct.Register(() => request.Abort()))
+            {
+                try
+                {
+                    using (Stream body = request.GetRequestStream())
+                    using (var file = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16))
+                    {
+                        body.Write(head, 0, head.Length);
+                        var buffer = new byte[1 << 20];
+                        int read;
+                        while ((read = file.Read(buffer, 0, buffer.Length)) > 0)
+                        {
+                            ct.ThrowIfCancellationRequested();
+                            body.Write(buffer, 0, read);
+                        }
+                        body.Write(tail, 0, tail.Length);
+                    }
+                    using (var response = (HttpWebResponse)request.GetResponse())
+                    {
+                        // A success: the body (the save's record) is not needed.
+                    }
+                }
+                catch (WebException ex) when (ex.Response is HttpWebResponse failed)
+                {
+                    using (failed)
+                    {
+                        string said = "";
+                        try
+                        {
+                            using (var reader = new StreamReader(failed.GetResponseStream()))
+                                said = reader.ReadToEnd();
+                        }
+                        catch
+                        {
+                        }
+                        said = said.Length > 300 ? said.Substring(0, 300) + "..." : said;
+                        string message = $"RomM answered {(int)failed.StatusCode} {failed.StatusDescription} to the upload ({length / (1024 * 1024)} MB). {said}".Trim();
+                        if ((int)failed.StatusCode == 413)
+                            throw new SaveTooLargeException(message, SaveTrim.LimitFrom(said));
+                        throw new InvalidOperationException(message);
+                    }
+                }
+                catch (WebException) when (ct.IsCancellationRequested)
+                {
+                    throw new OperationCanceledException(ct);
+                }
+            }
         }
 
         #endregion
@@ -975,7 +1113,12 @@ namespace RomM.Saves
                 if (!response.IsSuccessStatusCode)
                 {
                     var error = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
-                    Logger.Error($"[SaveSync] POST {url} -> {(int)response.StatusCode}: {error}");
+                    // RomM cancels a device's open session when it starts another (two games
+                    // synced at once): closing the cancelled one is refused, harmlessly.
+                    if (error.IndexOf("already CANCELLED", StringComparison.OrdinalIgnoreCase) >= 0)
+                        Logger.Debug($"[SaveSync] POST {url} -> {(int)response.StatusCode}: {error}");
+                    else
+                        Logger.Error($"[SaveSync] POST {url} -> {(int)response.StatusCode}: {error}");
                     return null;
                 }
 

@@ -40,7 +40,9 @@ namespace RomM.Saves
 
         public static string Md5HexFile(string path)
         {
-            using (var fs = File.OpenRead(path))
+            // Shared as the emulator has it: PCSX2 keeps a folder card's files open for writing
+            // while the game runs, and a sync during play must still read them.
+            using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
                 return Md5Hex(fs);
         }
 

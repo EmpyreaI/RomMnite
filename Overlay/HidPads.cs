@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -70,6 +71,27 @@ namespace RomM.Overlay
                         all |= reader.State;
                 }
                 return all;
+            }
+        }
+
+        /// <summary>The kind of the one pressed last (for its button pictures), or null.</summary>
+        public static ControllerGlyphs.Family? LastPressedFamily { get; private set; }
+
+        /// <summary>The kind of one being read now that has buttons of its own to show (Switch, PlayStation), or null.</summary>
+        public static ControllerGlyphs.Family? ConnectedFamily
+        {
+            get
+            {
+                lock (s_lock)
+                {
+                    foreach (Reader reader in s_readers.Values)
+                    {
+                        ControllerGlyphs.Family? family = reader.Family;
+                        if (family.HasValue && family.Value != ControllerGlyphs.Family.Xbox)
+                            return family;
+                    }
+                }
+                return null;
             }
         }
 
@@ -171,6 +193,36 @@ namespace RomM.Overlay
             private string _name;
             public volatile ushort State;
 
+            /// <summary>
+            /// Whose buttons it has. A generic pad (read through SDL's mapping) by what SDL says it
+            /// is: its controller type (Switch Pro or Joy-Con, PS4, PS5) or its name (a third-party
+            /// Switch pad, as PowerA's and HORI's, says "Switch", "NSW" or "Nintendo"); else an
+            /// Xbox pad's, which most others copy.
+            /// </summary>
+            public ControllerGlyphs.Family? Family =>
+                _layout == Layout.Switch ? ControllerGlyphs.Family.Switch
+                : _layout == Layout.DualSense ? ControllerGlyphs.Family.PlayStation5
+                : _layout == Layout.DualShock4 ? ControllerGlyphs.Family.PlayStation4
+                : _genericFamily;
+
+            private ControllerGlyphs.Family _genericFamily = ControllerGlyphs.Family.Xbox;
+
+            // SDL's controller types (SDL_GameControllerType): 4 PS4, 7 PS5, 5 Switch Pro,
+            // 11-13 Joy-Cons.
+            private static ControllerGlyphs.Family FamilyOf(ConnectedPad pad)
+            {
+                string name = pad?.Name ?? "";
+                int type = pad?.Type ?? 0;
+                if (type == 5 || type == 11 || type == 12 || type == 13
+                    || Regex.IsMatch(name, @"switch|nintendo|\bnsw\b|joy-?con|pro controller", RegexOptions.IgnoreCase))
+                    return ControllerGlyphs.Family.Switch;
+                if (type == 7 || Regex.IsMatch(name, @"dualsense|\bps5\b", RegexOptions.IgnoreCase))
+                    return ControllerGlyphs.Family.PlayStation5;
+                if (type == 3 || type == 4 || Regex.IsMatch(name, @"dualshock|\bps[34]\b|playstation", RegexOptions.IgnoreCase))
+                    return ControllerGlyphs.Family.PlayStation4;
+                return ControllerGlyphs.Family.Xbox;
+            }
+
             public static Reader Open(string path)
             {
                 SafeFileHandle handle = CreateFile(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
@@ -223,11 +275,12 @@ namespace RomM.Overlay
                             return null;
                         }
                         reader._layout = Layout.Generic;
+                        reader._genericFamily = FamilyOf(known);
                         reader._mapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                         Setup.ControllerProbe.ParseMapping(known.Mapping, reader._mapping);
                         reader._hatMin = HatMinimum(reader._preparsed);
                     }
-                    reader._name = $"{reader._layout} {vendor:x4}:{product:x4}";
+                    reader._name = $"{reader._layout} {vendor:x4}:{product:x4}" + (reader._layout == Layout.Generic ? $", shown as {reader._genericFamily}" : "");
                     return reader;
                 }
                 catch
@@ -249,7 +302,10 @@ namespace RomM.Overlay
                         {
                             if (!ReadFile(_handle, report, (uint)report.Length, out uint read, IntPtr.Zero) || read == 0)
                                 break;   // unplugged, or closed
-                            State = Decode(report, (int)read);
+                            ushort now = Decode(report, (int)read);
+                            if (now != 0 && (now & ~State) != 0)
+                                LastPressedFamily = Family;
+                            State = now;
                         }
                     }
                     catch (Exception ex)

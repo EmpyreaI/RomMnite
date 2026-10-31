@@ -156,8 +156,11 @@ namespace RomM.Settings
                 model.OverlayButton,
                 model.OverlayForPcGames,
                 model.BorderlessWindowedGames,
-                model.EmulatorMenusOnStartSelect,
-                model.EmulatorsAtDisplayResolution,
+                model.AutoUpdateGames,
+                model.GraphicsResolution,
+                model.GraphicsWidescreen,
+                model.GraphicsStretch,
+                model.GraphicsVSync,
                 model.SunshineEnabled,
                 model.SunshineUrl,
                 model.SunshineUser,
@@ -201,8 +204,11 @@ namespace RomM.Settings
                     model.OverlayButton = before.OverlayButton;
                     model.OverlayForPcGames = before.OverlayForPcGames;
                     model.BorderlessWindowedGames = before.BorderlessWindowedGames;
-                    model.EmulatorMenusOnStartSelect = before.EmulatorMenusOnStartSelect;
-                    model.EmulatorsAtDisplayResolution = before.EmulatorsAtDisplayResolution;
+                    model.AutoUpdateGames = before.AutoUpdateGames;
+                    model.GraphicsResolution = before.GraphicsResolution;
+                    model.GraphicsWidescreen = before.GraphicsWidescreen;
+                    model.GraphicsStretch = before.GraphicsStretch;
+                    model.GraphicsVSync = before.GraphicsVSync;
                     model.SunshineEnabled = before.SunshineEnabled;
                     model.SunshineUrl = before.SunshineUrl;
                     model.SunshineUser = before.SunshineUser;

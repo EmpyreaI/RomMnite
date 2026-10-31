@@ -254,18 +254,33 @@ namespace RomM.Settings
 
         // The in-game overlay (Overlay/GameOverlay): the controller button that opens it
         // ("Guide" the Home button, "BackStart" or "L3R3" held, "None" keyboard only), whether
-        // Windows games get it too, and whether emulators' own menus are moved to Start + Select
-        // (Setup/EmulatorMenus) so the Home button is the overlay's alone.
+        // Windows games get it too. Emulators' own menus go on whichever button it leaves free
+        // (Setup/EmulatorMenus.For).
         public string OverlayButton { get; set; } = "Guide";
         public bool OverlayForPcGames { get; set; } = true;
         // Windows games in an ordinary window made borderless on their screen (Overlay/BorderlessWindows),
         // so the overlay can show over them.
         public bool BorderlessWindowedGames { get; set; } = false;
-        public bool EmulatorMenusOnStartSelect { get; set; } = true;
+        // Game updates on the server downloaded as soon as a library update finds them (Games/GameUpdates).
+        public bool AutoUpdateGames { get; set; } = false;
 
-        // Emulators render at the display's resolution, where still at their default
-        // (Setup/EmulatorUpscale).
+        // Emulators' graphics, written into each emulator's settings as a game starts
+        // (Setup/EmulatorGraphics): resolution "Original", "2x", "3x", "4x" or "Screen",
+        // widescreen, stretching to fill the screen, VSync.
+        public string GraphicsResolution { get; set; } = null;
+        public bool GraphicsWidescreen { get; set; } = false;
+        public bool GraphicsStretch { get; set; } = false;
+        public bool GraphicsVSync { get; set; } = true;
+        // Before the resolution choice: on was "Screen", off "Original". Read to carry it over.
         public bool EmulatorsAtDisplayResolution { get; set; } = true;
+
+        internal global::RomM.Setup.GraphicsChoice Graphics() => new global::RomM.Setup.GraphicsChoice
+        {
+            Resolution = GraphicsResolution ?? "Screen",
+            Widescreen = GraphicsWidescreen,
+            Stretch = GraphicsStretch,
+            VSync = GraphicsVSync,
+        };
 
         // Sunshine (game streaming): installed games listed in it as applications (Integrations/
         // SunshineSync), through its web API with its web UI's name and password. The password
@@ -399,8 +414,12 @@ namespace RomM.Settings
                 OverlayButton = string.IsNullOrEmpty(savedSettings.OverlayButton) ? "Guide" : savedSettings.OverlayButton;
                 OverlayForPcGames = savedSettings.OverlayForPcGames;
                 BorderlessWindowedGames = savedSettings.BorderlessWindowedGames;
-                EmulatorMenusOnStartSelect = savedSettings.EmulatorMenusOnStartSelect;
+                AutoUpdateGames = savedSettings.AutoUpdateGames;
                 EmulatorsAtDisplayResolution = savedSettings.EmulatorsAtDisplayResolution;
+                GraphicsResolution = savedSettings.GraphicsResolution ?? (savedSettings.EmulatorsAtDisplayResolution ? "Screen" : "Original");
+                GraphicsWidescreen = savedSettings.GraphicsWidescreen;
+                GraphicsStretch = savedSettings.GraphicsStretch;
+                GraphicsVSync = savedSettings.GraphicsVSync;
                 SunshineEnabled = savedSettings.SunshineEnabled;
                 SunshineUrl = string.IsNullOrWhiteSpace(savedSettings.SunshineUrl) ? "https://localhost:47990" : savedSettings.SunshineUrl;
                 SunshineUser = savedSettings.SunshineUser ?? "";
@@ -427,6 +446,9 @@ namespace RomM.Settings
             }
 
             ProfilePath = ResolveProfilePath();
+
+            if (GraphicsResolution == null)
+                GraphicsResolution = "Screen";
 
             if (forceSave)
             {

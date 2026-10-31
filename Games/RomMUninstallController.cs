@@ -77,6 +77,7 @@ namespace RomM.Games
             }
 
             Game.Roms?.Clear();
+            _romM.Updates?.Uninstalled(Game.Id);
             InvokeOnUninstalled(new GameUninstalledEventArgs());
         }
     }

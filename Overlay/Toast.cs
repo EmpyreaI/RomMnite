@@ -28,10 +28,15 @@ namespace RomM.Overlay
         /// <param name="picture">A file or web address for the picture at the card's left, or null.</param>
         /// <param name="glyph">An icon (Segoe Fluent Icons) in place of a picture.</param>
         /// <param name="screenOf">A window whose screen it shows on (the game's); else the main screen.</param>
+        /// <param name="keyboardMessage">
+        /// The message while the keyboard and mouse are in use, when it differs: then
+        /// <paramref name="message"/> is the controller's, and the card shows whichever is in use,
+        /// changing as that does (ControllerGlyphs.Bind).
+        /// </param>
         public static void Show(string title, string message, string picture = null, string glyph = null, Action onClick = null,
-            IntPtr screenOf = default(IntPtr), double seconds = 6)
+            IntPtr screenOf = default(IntPtr), double seconds = 6, string keyboardMessage = null)
         {
-            Application.Current?.Dispatcher?.BeginInvoke(new Action(() => Open(title, message, picture, glyph, onClick, screenOf, seconds, null)));
+            Application.Current?.Dispatcher?.BeginInvoke(new Action(() => Open(title, message, picture, glyph, onClick, screenOf, seconds, null, keyboardMessage)));
         }
 
         /// <summary>
@@ -101,7 +106,8 @@ namespace RomM.Overlay
             Show("Achievement unlocked", line, picture, "\uE734", null, GetForegroundWindow(), 7);
         }
 
-        private static void Open(string title, string message, string picture, string glyph, Action onClick, IntPtr screenOf, double seconds, Live live)
+        private static void Open(string title, string message, string picture, string glyph, Action onClick, IntPtr screenOf, double seconds, Live live,
+            string keyboardMessage = null)
         {
             var window = new Window
             {
@@ -128,6 +134,12 @@ namespace RomM.Overlay
             if (!string.IsNullOrEmpty(message) || live != null)
             {
                 var text = new TextBlock { Text = message ?? "", FontSize = 12.5, Foreground = new SolidColorBrush(Color.FromArgb(0xC8, 0xFF, 0xFF, 0xFF)), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 3, 0, 0) };
+                // Buttons named in braces ({A}) drawn as the controller's (ControllerGlyphs); with
+                // a keyboard version too, whichever is in use, live.
+                if (keyboardMessage != null)
+                    ControllerGlyphs.Bind(text, message, keyboardMessage);
+                else if ((message ?? "").IndexOf('{') >= 0)
+                    ControllerGlyphs.Fill(text, message);
                 words.Children.Add(text);
                 if (live != null)
                     live.Message = text;

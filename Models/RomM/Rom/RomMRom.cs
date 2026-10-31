@@ -48,6 +48,23 @@ namespace RomM.Models.RomM.Rom
 
         [JsonProperty("full_path")]
         public string FullPath { get; set; }
+
+        // What tells a changed file (GameUpdates): when RomM last saw it change on disk, and its
+        // hashes where RomM computes them (not for Windows games, whose platform it does not hash).
+        [JsonProperty("last_modified")]
+        public DateTime? LastModified { get; set; }
+
+        [JsonProperty("updated_at")]
+        public DateTime? UpdatedAt { get; set; }
+
+        [JsonProperty("crc_hash")]
+        public string Crc { get; set; }
+
+        [JsonProperty("md5_hash")]
+        public string Md5 { get; set; }
+
+        [JsonProperty("sha1_hash")]
+        public string Sha1 { get; set; }
     }
 
     public class RomMSibling

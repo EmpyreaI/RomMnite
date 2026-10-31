@@ -23,6 +23,9 @@ namespace RomM
         /// </summary>
         void LendFromOtherVersions(RomMRom rom);
 
+        /// <summary>Installed games' updates from the server (Games.GameUpdates).</summary>
+        Games.GameUpdates Updates { get; }
+
         /// <summary>
         /// The emulator mapping a game was imported under, from its ROM sidecar, or null when the
         /// sidecar or the mapping is gone. Unlike the game's play action this follows the mapping

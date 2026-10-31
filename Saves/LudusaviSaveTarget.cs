@@ -20,6 +20,16 @@ namespace RomM.Saves
     ///
     /// Ludusavi is only run when the save is actually looked at, so merely resolving the target
     /// (which happens several times around a play session) costs nothing.
+    ///
+    /// A game run with a Steam emulator keeps what it saves through Steam's cloud in the
+    /// emulator's own folder, where Ludusavi does not look (it looks in Steam's userdata). That
+    /// folder travels too, as one more folder of the backup ("SteamEmu"), copied in before each
+    /// upload and back out after a download.
+    ///
+    /// Saves Ludusavi's manifest puts in the game's own folder ("&lt;base&gt;/...") are found here
+    /// too (LudusaviManifest), since Ludusavi only knows a game's folder in a store's library, not
+    /// in RomMnite's. They travel as the "InstallFolder" folder of the backup, by their paths
+    /// within the game's folder.
     /// </summary>
     internal sealed class LudusaviSaveTarget : SaveTarget
     {
@@ -33,13 +43,22 @@ namespace RomM.Saves
         private FolderSetSaveTarget _backup;
         private string _statusHeadline;
         private string _statusDetail;
+        private readonly string _steamEmuFolder;
+        private const string SteamEmuUnit = "SteamEmu";
+        private const string InstallUnit = "InstallFolder";
+        private readonly string _installDir;
+        private string _title;   // the title Ludusavi knows the game by, once found
 
         public override string StatusHeadline => _statusHeadline;
 
         public override string StatusDetail => _statusDetail;
 
-        public LudusaviSaveTarget(string ludusaviExe, string workDir, string gameName, string fileName, ILogger logger, string customTitle = null)
+        /// <param name="steamEmuFolder">The game's Steam emulator's cloud folder (SteamEmuFiles.CloudFolder), or null.</param>
+        public LudusaviSaveTarget(string ludusaviExe, string workDir, string gameName, string fileName, ILogger logger, string customTitle = null,
+            string steamEmuFolder = null, string installDir = null)
         {
+            _installDir = installDir;
+            _steamEmuFolder = steamEmuFolder;
             _customTitle = string.IsNullOrWhiteSpace(customTitle) ? null : customTitle.Trim();
             _exe = ludusaviExe;
             _workDir = workDir;
@@ -54,7 +73,9 @@ namespace RomM.Saves
 
         public override string FileName { get; }
 
-        public override string Describe() => $"Ludusavi backup of \"{_gameName}\" in \"{_workDir}\"";
+        public override string Describe() => $"Ludusavi backup of \"{_gameName}\" in \"{_workDir}\"" +
+            (_steamEmuFolder != null ? $", with its Steam emulator's saves in \"{_steamEmuFolder}\"" : "") +
+            (_installDir != null ? $", and the saves its manifest puts in \"{_installDir}\"" : "");
 
         /// <summary>The backup as it stands after asking Ludusavi to refresh it, once per sync.</summary>
         private FolderSetSaveTarget Backup()
@@ -64,6 +85,8 @@ namespace RomM.Saves
 
             Directory.CreateDirectory(_workDir);
             RefreshBackup();
+            CopySteamEmuIn();
+            CopyInstallFolderIn();
             return _backup = Wrap();
         }
 
@@ -92,12 +115,14 @@ namespace RomM.Saves
                     return;
                 }
 
+                _title = _customTitle;
                 if (((custom?["games"] as JObject)?.Count ?? 0) == 0)
                     _logger?.Info($"[SaveSync] Ludusavi found no saves on this computer for \"{_customTitle}\".");
                 return;
             }
 
             JObject result = Run($"backup --force --api --path {Quote(_workDir)} {Quote(_gameName)}");
+            _title = _gameName;
 
             // Ludusavi's titles are PCGamingWiki's, which need not match the library's. When it
             // does not know the name, ask it for its closest title and back that up instead.
@@ -109,18 +134,143 @@ namespace RomM.Saves
                     _logger?.Info($"[SaveSync] Ludusavi does not know a game called \"{_gameName}\"; nothing to back up. " +
                                   "Add it as a custom game in Ludusavi to sync its saves.");
                     _statusHeadline = "Game not recognised";
+                    _title = null;
                     _statusDetail = $"Ludusavi does not know a game called \"{_gameName}\", so its saves are not being synced. " +
                                     "Set its Ludusavi name from the game's right-click menu.";
                     return;
                 }
 
                 _logger?.Info($"[SaveSync] Ludusavi knows \"{_gameName}\" as \"{title}\".");
+                _title = title;
                 result = Run($"backup --force --api --path {Quote(_workDir)} {Quote(title)}");
             }
 
             int games = (result?["games"] as JObject)?.Count ?? 0;
             if (games == 0)
                 _logger?.Info($"[SaveSync] Ludusavi found no saves on this computer for \"{_gameName}\".");
+        }
+
+        // The Steam emulator's cloud folder, as it is now, into the backup (or out of it, when
+        // it has nothing).
+        private void CopySteamEmuIn()
+        {
+            if (_steamEmuFolder == null)
+                return;
+            string unit = Path.Combine(_workDir, SteamEmuUnit);
+            try
+            {
+                if (Directory.Exists(unit))
+                    Directory.Delete(unit, true);
+                if (!Directory.Exists(_steamEmuFolder) || !Directory.EnumerateFiles(_steamEmuFolder, "*", SearchOption.AllDirectories).Any())
+                    return;
+                int files = CopyTree(_steamEmuFolder, unit);
+                _logger?.Info($"[SaveSync] \"{_gameName}\": {files} Steam emulator save file(s) from \"{_steamEmuFolder}\".");
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn($"[SaveSync] Could not copy the Steam emulator's saves of \"{_gameName}\": {ex.Message}");
+            }
+        }
+
+        // The backup's Steam emulator folder back where the emulator keeps it. Whether there was one.
+        private bool CopySteamEmuOut()
+        {
+            string unit = Path.Combine(_workDir, SteamEmuUnit);
+            if (_steamEmuFolder == null || !Directory.Exists(unit))
+                return false;
+            if (Directory.Exists(_steamEmuFolder))
+                Directory.Delete(_steamEmuFolder, true);
+            int files = CopyTree(unit, _steamEmuFolder);
+            _logger?.Info($"[SaveSync] \"{_gameName}\": {files} Steam emulator save file(s) restored to \"{_steamEmuFolder}\".");
+            return true;
+        }
+
+        // ---- Saves in the game's own folder ------------------------------------------------------
+
+        // The manifest's entry for the game, and which folder is its <base>; null when there is
+        // nothing of the kind (no install folder, no manifest, no such saves).
+        private LudusaviManifest.Entry InstallEntry(out string baseFolder)
+        {
+            baseFolder = null;
+            if (string.IsNullOrEmpty(_installDir) || !Directory.Exists(_installDir))
+                return null;
+            string manifest = LudusaviManifest.PathFor(_exe);
+            if (manifest == null)
+                return null;
+            string title = _title ?? _customTitle;
+            if (title == null)
+            {
+                // Before any backup (a download first): the library's name, else Ludusavi's match.
+                title = LudusaviManifest.For(manifest, _gameName) != null ? _gameName : FindTitle(_gameName);
+                _title = title;
+            }
+            LudusaviManifest.Entry entry = LudusaviManifest.For(manifest, title);
+            if (entry == null || entry.BasePaths.Count == 0)
+                return null;
+            baseFolder = LudusaviManifest.BaseFolder(_installDir, entry);
+            return baseFolder == null ? null : entry;
+        }
+
+        private void CopyInstallFolderIn()
+        {
+            string unit = Path.Combine(_workDir, InstallUnit);
+            try
+            {
+                if (Directory.Exists(unit))
+                    Directory.Delete(unit, true);
+                LudusaviManifest.Entry entry = InstallEntry(out string baseFolder);
+                if (entry == null)
+                    return;
+                List<string> files = LudusaviManifest.Files(baseFolder, entry);
+                if (files.Count == 0)
+                {
+                    _logger?.Info($"[SaveSync] \"{_gameName}\": no saves in its own folder yet ({string.Join(", ", entry.BasePaths)} in \"{baseFolder}\").");
+                    return;
+                }
+                foreach (string relative in files)
+                {
+                    string target = Path.Combine(unit, relative);
+                    Directory.CreateDirectory(Path.GetDirectoryName(target));
+                    File.Copy(Path.Combine(baseFolder, relative), target, true);
+                }
+                _logger?.Info($"[SaveSync] \"{_gameName}\": {files.Count} save file(s) in its own folder, \"{baseFolder}\" ({string.Join(", ", entry.BasePaths)}).");
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn($"[SaveSync] Could not copy the saves in \"{_gameName}\"'s own folder: {ex.Message}");
+            }
+        }
+
+        // The backup's InstallFolder back into the game's folder. Whether there was one.
+        private bool CopyInstallFolderOut()
+        {
+            string unit = Path.Combine(_workDir, InstallUnit);
+            if (!Directory.Exists(unit))
+                return false;
+            LudusaviManifest.Entry entry = InstallEntry(out string baseFolder);
+            if (entry == null)
+            {
+                _logger?.Warn($"[SaveSync] \"{_gameName}\": the save holds files for the game's own folder, but the game isn't installed here (or Ludusavi's manifest is missing); they were not put back.");
+                return false;
+            }
+            int files = CopyTree(unit, baseFolder);
+            _logger?.Info($"[SaveSync] \"{_gameName}\": {files} save file(s) restored into its own folder, \"{baseFolder}\".");
+            return true;
+        }
+
+        // Files keep their times (File.Copy does), so an unchanged save hashes and dates the same.
+        private static int CopyTree(string from, string to)
+        {
+            int count = 0;
+            Directory.CreateDirectory(to);
+            foreach (string file in Directory.EnumerateFiles(from, "*", SearchOption.AllDirectories))
+            {
+                string target = Path.Combine(to, file.Substring(from.TrimEnd('\\', '/').Length).TrimStart('\\', '/'));
+                Directory.CreateDirectory(Path.GetDirectoryName(target));
+                File.Copy(file, target, true);
+                count++;
+            }
+            return count;
         }
 
         private static bool IsUnknown(JObject result, string name)
@@ -157,12 +307,22 @@ namespace RomM.Saves
 
             // The working folder holds this game alone, so "restore everything in it" is exactly
             // this game, whatever title Ludusavi filed it under.
+            bool steamEmu = CopySteamEmuOut() | CopyInstallFolderOut();
+            bool ludusaviPart = new DirectoryInfo(_workDir).GetDirectories()
+                .Any(d => !d.Name.StartsWith(".", StringComparison.Ordinal) && d.Name != SteamEmuUnit && d.Name != InstallUnit);
+            if (!ludusaviPart)
+            {
+                if (!steamEmu)
+                    throw new InvalidOperationException("The downloaded save held nothing to restore.");
+                return;
+            }
             JObject result = Run($"restore --force --api --path {Quote(_workDir)}");
             int games = (result?["games"] as JObject)?.Count ?? 0;
-            if (games == 0)
+            if (games == 0 && !steamEmu)
                 throw new InvalidOperationException("Ludusavi restored nothing from the downloaded save.");
 
-            _logger?.Info($"[SaveSync] Ludusavi restored the save for \"{_gameName}\".");
+            if (games > 0)
+                _logger?.Info($"[SaveSync] Ludusavi restored the save for \"{_gameName}\".");
         }
 
         /// <summary>
@@ -194,6 +354,25 @@ namespace RomM.Saves
                     }
                 }
                 registry += (game.Value["registry"] as JObject)?.Count ?? 0;
+            }
+
+            LudusaviManifest.Entry own = InstallEntry(out string ownFolder);
+            if (own != null)
+            {
+                foreach (string relative in LudusaviManifest.Files(ownFolder, own))
+                {
+                    File.Delete(Path.Combine(ownFolder, relative));
+                    files++;
+                }
+            }
+
+            if (_steamEmuFolder != null && Directory.Exists(_steamEmuFolder))
+            {
+                foreach (string file in Directory.GetFiles(_steamEmuFolder, "*", SearchOption.AllDirectories))
+                {
+                    File.Delete(file);
+                    files++;
+                }
             }
 
             if (Directory.Exists(_workDir))

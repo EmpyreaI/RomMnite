@@ -199,6 +199,91 @@ namespace RomM.Integrations
             }
         }
 
+        // ---- A stream going on ----------------------------------------------------------------
+
+        /// <summary>
+        /// Whether a game is being streamed now, from Sunshine's own log (api/logs, the log of
+        /// this run of Sunshine): "New streaming session started [active sessions: N]" sets the
+        /// count, "CLIENT DISCONNECTED" and "Ping Timeout" take one off, "Process terminated" (the
+        /// app ended) none left. Read from Sunshine's source (rtsp.cpp, stream.cpp). Null when it
+        /// cannot be told (off, not reachable).
+        /// </summary>
+        public async Task<bool?> StreamingAsync()
+        {
+            SunshineSettings settings = _settings();
+            if (settings == null || !settings.Enabled)
+                return null;
+            try
+            {
+                using (HttpClient client = Client(settings, out string problem))
+                {
+                    if (client == null)
+                        return null;
+                    using (var response = await client.GetAsync("api/logs").ConfigureAwait(false))
+                    {
+                        if (!response.IsSuccessStatusCode)
+                            return null;
+                        string log = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                        return ActiveSessions(log) > 0;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                s_log.Debug($"[Sunshine] Could not tell whether a stream is going on: {ex.Message}");
+                return null;
+            }
+        }
+
+        private static readonly Regex SessionStarted = new Regex(@"New streaming session started \[active sessions: (\d+)\]");
+
+        internal static int ActiveSessions(string log)
+        {
+            int active = 0;
+            foreach (string line in (log ?? "").Split('\n'))
+            {
+                Match started = SessionStarted.Match(line);
+                if (started.Success)
+                    active = int.Parse(started.Groups[1].Value);
+                else if (line.Contains("CLIENT DISCONNECTED") || line.Contains("Ping Timeout"))
+                    active = Math.Max(0, active - 1);
+                else if (line.Contains("Process terminated"))
+                    active = 0;
+            }
+            return active;
+        }
+
+        /// <summary>
+        /// Ends the stream: Sunshine's "close app" (api/apps/close). For a game RomMnite added,
+        /// Sunshine only started Playnite, which handed the game over and ended, so nothing of the
+        /// game's is Sunshine's to stop: the stream ends and the game runs on. (Not so for a game
+        /// Sunshine itself started; the overlay does not offer it then.) Null when done, else why not.
+        /// </summary>
+        public async Task<string> EndStreamAsync()
+        {
+            SunshineSettings settings = _settings();
+            try
+            {
+                using (HttpClient client = Client(settings, out string problem))
+                {
+                    if (client == null)
+                        return problem;
+                    using (var content = new StringContent("{}", Encoding.UTF8, "application/json"))
+                    using (var response = await client.PostAsync("api/apps/close", content).ConfigureAwait(false))
+                    {
+                        if (!response.IsSuccessStatusCode)
+                            return $"Sunshine answered {(int)response.StatusCode}.";
+                        s_log.Info("[Sunshine] The stream was ended from the overlay (the game keeps running).");
+                        return null;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                return "Sunshine could not be reached: " + (ex.InnerException?.Message ?? ex.Message);
+            }
+        }
+
         // ---- Sunshine's side ------------------------------------------------------------------
 
         private sealed class SunshineApp

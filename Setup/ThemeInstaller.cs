@@ -42,14 +42,26 @@ namespace RomM.Setup
                     string target = Path.Combine(themes, relative);
                     if (File.Exists(target) && SameContent(file, target))
                         continue;
-                    Directory.CreateDirectory(Path.GetDirectoryName(target));
-                    if (File.Exists(target) && !File.Exists(target + ".before-romm.bak"))
-                        File.Copy(target, target + ".before-romm.bak");
-                    File.Copy(file, target, true);
-                    written++;
+                    // One file in use (Playnite holds the theme's window icon, applogo.ico, open
+                    // while it runs) does not stop the others: it is written as Playnite closes.
+                    try
+                    {
+                        CopyOver(file, target);
+                        written++;
+                    }
+                    catch (IOException)
+                    {
+                        lock (s_inUse)
+                            s_inUse[target] = file;
+                    }
                 }
                 if (written > 0)
                     s_log.Info($"[Theme] {written} theme file(s) brought up to date in {themes}.");
+                lock (s_inUse)
+                {
+                    if (s_inUse.Count > 0)
+                        s_log.Info($"[Theme] {s_inUse.Count} theme file(s) in use, written when Playnite closes: {string.Join(", ", s_inUse.Keys.Select(Path.GetFileName))}.");
+                }
 
                 // The first time: Playnite switched to the theme, its settings file written at once
                 // (Playnite writes it only when quit from its menu), and a restart offered. Marked
@@ -73,6 +85,36 @@ namespace RomM.Setup
             catch (Exception ex)
             {
                 s_log.Warn($"[Theme] Could not install the theme: {ex.Message}");
+            }
+        }
+
+        private static readonly Dictionary<string, string> s_inUse = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        private static void CopyOver(string file, string target)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(target));
+            if (File.Exists(target) && !File.Exists(target + ".before-romm.bak"))
+                File.Copy(target, target + ".before-romm.bak");
+            File.Copy(file, target, true);
+        }
+
+        /// <summary>The theme files that were in use at start-up, written now (as Playnite closes).</summary>
+        public static void FinishInUse()
+        {
+            lock (s_inUse)
+            {
+                foreach (var pair in s_inUse.ToList())
+                {
+                    try
+                    {
+                        CopyOver(pair.Value, pair.Key);
+                        s_inUse.Remove(pair.Key);
+                    }
+                    catch (Exception ex)
+                    {
+                        s_log.Debug($"[Theme] {Path.GetFileName(pair.Key)} still in use: {ex.Message}");
+                    }
+                }
             }
         }
 

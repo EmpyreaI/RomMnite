@@ -19,18 +19,32 @@
                             <ColumnDefinition />
                         </Grid.ColumnDefinitions>
 
-                        <FadeImage x:Name="PART_ImageBackground" Grid.Row="0" Grid.Column="0" Grid.RowSpan="2"
-                                   HorizontalAlignment="Center" VerticalAlignment="Top" >
+                        <!-- The selected game's background, not shown under Home (or Downloads): a game
+                             selected before (the last one when Playnite closed) would otherwise stay
+                             behind the shelves. -->
+                        <Grid Grid.Row="0" Grid.Column="0" Grid.RowSpan="2">
+                            <Grid.Style>
+                                <Style TargetType="Grid">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{PluginSettings Plugin=RomM, Path=LibraryHomeVisible, FallbackValue=False}" Value="True">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Grid.Style>
+                            <FadeImage x:Name="PART_ImageBackground"
+                                       HorizontalAlignment="Center" VerticalAlignment="Top" >
 
-                            <!--<FadeImage.ImageOpacityMask>
-                                <RadialGradientBrush GradientOrigin="0.5,0" Center="0.5,0" RadiusX="1" RadiusY="1.5">
-                                    <RadialGradientBrush.GradientStops>
-                                        <GradientStop Color="Black" Offset="0.4" />
-                                        <GradientStop Color="Transparent" Offset="0.98" />
-                                    </RadialGradientBrush.GradientStops>
-                                </RadialGradientBrush>
-                            </FadeImage.ImageOpacityMask>-->
-                        </FadeImage>
+                                <!--<FadeImage.ImageOpacityMask>
+                                    <RadialGradientBrush GradientOrigin="0.5,0" Center="0.5,0" RadiusX="1" RadiusY="1.5">
+                                        <RadialGradientBrush.GradientStops>
+                                            <GradientStop Color="Black" Offset="0.4" />
+                                            <GradientStop Color="Transparent" Offset="0.98" />
+                                        </RadialGradientBrush.GradientStops>
+                                    </RadialGradientBrush>
+                                </FadeImage.ImageOpacityMask>-->
+                            </FadeImage>
+                        </Grid>
                  
                         <!-- The game list and page; hidden while the Downloads page is up, as Steam's. -->
                  

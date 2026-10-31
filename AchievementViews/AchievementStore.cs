@@ -19,6 +19,18 @@ namespace RomM.AchievementViews
         public DateTime? UnlockedHardcoreUtc { get; set; }
         public int Order { get; set; }
 
+        /// <summary>
+        /// The share of players who have it (Steam's, in percent), where the set has no points of
+        /// its own to show instead; null when not known.
+        /// </summary>
+        public double? Rarity { get; set; }
+
+        /// <summary>
+        /// How many players have it (RetroAchievements'), where the share is not known: no count
+        /// of the game's players comes with it, so it is only compared with the set's others.
+        /// </summary>
+        public int? Players { get; set; }
+
         /// <summary>A hidden trophy or secret achievement not unlocked yet: shown as such.</summary>
         public bool Hidden { get; set; }
 
@@ -27,6 +39,18 @@ namespace RomM.AchievementViews
 
         [JsonIgnore]
         public DateTime? When => UnlockedHardcoreUtc ?? UnlockedUtc;
+
+        /// <summary>
+        /// How rare it is, 0 (rarest) to 100: the share of players (Rarity), or for
+        /// RetroAchievements its players compared with its set's most earned achievement's.
+        /// Worked out when the set is read (GameAchievements.ScoreRarity); null when not known.
+        /// </summary>
+        [JsonIgnore]
+        public double? RarityScore { get; set; }
+
+        /// <summary>A rare one, drawn with a glowing edge (RareGlow): a tenth or fewer.</summary>
+        [JsonIgnore]
+        public bool Rare => RarityScore.HasValue && RarityScore.Value <= RareGlow.RareAt;
     }
 
     /// <summary>A game's RetroAchievements set with the signed-in user's progress in it.</summary>
@@ -44,6 +68,16 @@ namespace RomM.AchievementViews
         /// keeps no achievements RomMnite can read), said over it; null when it can.
         /// </summary>
         public string Unavailable { get; set; }
+
+        /// <summary>Each achievement's <see cref="AchievementItem.RarityScore"/>, from the set as a whole.</summary>
+        public GameAchievements ScoreRarity()
+        {
+            int most = Items.Count == 0 ? 0 : Items.Max(i => i.Players ?? 0);
+            foreach (AchievementItem item in Items)
+                item.RarityScore = item.Rarity
+                    ?? (item.Players.HasValue && most > 0 ? 100.0 * item.Players.Value / most : (double?)null);
+            return this;
+        }
 
         [JsonIgnore] public int Total => Items.Count;
         [JsonIgnore] public int Unlocked => Items.Count(i => i.Unlocked);
@@ -125,7 +159,7 @@ namespace RomM.AchievementViews
                 {
                     s_log.Warn($"[Achievements] Could not read the achievements of {gameId}: {ex.Message}");
                 }
-                _cache[gameId] = loaded;
+                _cache[gameId] = loaded?.ScoreRarity();
                 return loaded;
             }
         }
@@ -134,7 +168,7 @@ namespace RomM.AchievementViews
         {
             lock (_lock)
             {
-                _cache[gameId] = data;
+                _cache[gameId] = data?.ScoreRarity();
                 try
                 {
                     Directory.CreateDirectory(_folder);

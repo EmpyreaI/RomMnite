@@ -24,6 +24,10 @@ namespace RomM.Models.RomM.Achievements
         [JsonProperty("points")]
         public int? Points { get; set; }
 
+        // How many players have it (RetroAchievements' NumAwarded, softcore and hardcore).
+        [JsonProperty("num_awarded")]
+        public int? NumAwarded { get; set; }
+
         // Ties an achievement to the entries in the user's earned list.
         [JsonProperty("badge_id")]
         public string BadgeId { get; set; }

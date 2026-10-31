@@ -29,6 +29,14 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
+  <!-- Controller and keyboard glyphs (Kenney's Input Prompts, CC0) for the overlay and its pop-ups
+       (Overlay/ControllerGlyphs.cs), one folder per kind of controller. -->
+  <ItemGroup>
+    <None Remove="Glyphs\**" />
+    <Content Include="Glyphs\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
   <!-- SDL2 (zlib licence), 32- and 64-bit, for telling which controllers are connected and
        whether the emulators will know them (Games/ControllerMonitor.cs loads the one that fits). -->
   <ItemGroup>

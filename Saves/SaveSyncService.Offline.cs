@@ -45,6 +45,7 @@ namespace RomM.Saves
             public DateTime SinceUtc { get; set; }
             public DateTime NextTryUtc { get; set; }
             public string Reason { get; set; }
+            public bool Unreachable { get; set; }     // the server could not be reached (not another failure)
         }
 
         private readonly object _pendingLock = new object();
@@ -123,7 +124,7 @@ namespace RomM.Saves
                 {
                     if (entry != null)
                     {
-                        hadProgress = entry.LocalProgress;
+                        hadProgress = entry.LocalProgress && entry.Unreachable;
                         Pending.Remove(game.Id);
                         changed = true;
                     }
@@ -139,6 +140,12 @@ namespace RomM.Saves
                     }
                     entry.LocalProgress |= progress;
                     entry.Reason = outcome.Message;
+                    // Failures that are the server out of reach carry no message of their own
+                    // (or say the negotiation or device registration failed); any other is a
+                    // problem here, after which "progress made offline" would be wrong to say.
+                    entry.Unreachable = outcome.Message == null
+                        || outcome.Message.StartsWith("Save sync negotiation", StringComparison.Ordinal)
+                        || outcome.Message.StartsWith("Could not register this device", StringComparison.Ordinal);
                     entry.NextTryUtc = DateTime.UtcNow + RetryFailingEvery;
                     changed = true;
                 }

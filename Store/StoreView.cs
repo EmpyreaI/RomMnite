@@ -3222,8 +3222,12 @@ namespace RomM.Store
                 return;
 
             double points = 0;
+            double mostPlayers = 0;
             foreach (JToken a in achievements)
+            {
                 points += Number(a, "points") ?? 0;
+                mostPlayers = System.Math.Max(mostPlayers, Number(a, "num_awarded") ?? 0);
+            }
             var badges = new List<Badge>();
             foreach (JToken a in achievements.OrderBy(t => Number(t, "display_order") ?? 0))
             {
@@ -3235,7 +3239,11 @@ namespace RomM.Store
                     Url = string.IsNullOrEmpty(path) ? null
                         : Url(path.StartsWith("/assets/") || path.StartsWith("assets/") ? path : "/assets/romm/resources/" + path.TrimStart('/')),
                     Fallback = Str(a, "badge_url"),
-                    Tip = $"{Str(a, "title")}\n{Str(a, "description")}\n{Number(a, "points") ?? 0:0} points",
+                    Tip = $"{Str(a, "title")}\n{Str(a, "description")}\n{Number(a, "points") ?? 0:0} points"
+                          + (Number(a, "num_awarded").HasValue ? $"\n{Number(a, "num_awarded"):N0} players have this" : ""),
+                    // Rare: a tenth or fewer of the players of the set's most earned one.
+                    Rare = mostPlayers > 0 && Number(a, "num_awarded").HasValue
+                           && 100.0 * Number(a, "num_awarded").Value / mostPlayers <= global::RomM.AchievementViews.RareGlow.RareAt,
                 });
             }
             AddBadgeBox(column, "RETROACHIEVEMENTS", $"{achievements.Count} achievements  \u00B7  {points:0} points", badges);
@@ -3247,6 +3255,7 @@ namespace RomM.Store
             public string Url;
             public string Fallback;
             public string Tip;
+            public bool Rare;   // drawn with a glowing gold edge (RareGlow)
         }
 
         // A box of achievements: a line, the first few badges and a tile to see them all.
@@ -3270,13 +3279,16 @@ namespace RomM.Store
                     var picture = new Image { Width = size, Height = size, Stretch = Stretch.UniformToFill };
                     RenderOptions.SetBitmapScalingMode(picture, BitmapScalingMode.Fant);
                     ShowPicture(picture, a.Url, 128, null, a.Fallback);
-                    badges.Children.Add(new Border
+                    var frame = new Border
                     {
                         Background = new SolidColorBrush(Color.FromArgb(0x40, 0, 0, 0)),
                         Margin = new Thickness(0, 0, 6, 6),
                         Child = picture,
                         ToolTip = a.Tip,
-                    });
+                    };
+                    if (a.Rare)
+                        global::RomM.AchievementViews.RareGlow.Apply(frame, true);
+                    badges.Children.Add(frame);
                 }
 
                 // "View all 47", or "Show fewer" once open.
@@ -3346,9 +3358,12 @@ namespace RomM.Store
                     var badges = list.OrderBy(a => a.Hidden).ThenBy(a => a.Order).Select(a => new Badge
                     {
                         Url = global::RomM.Games.EmulatorAchievements.SteamIconUrl(appId, a.Icon),
+                        // Older games' pictures are also (or only) at Steam's older address.
+                        Fallback = global::RomM.Games.EmulatorAchievements.SteamIconUrls(appId, a.Icon).LastOrDefault(),
                         Tip = a.Hidden && string.IsNullOrEmpty(a.Description)
                             ? $"{a.Title}\nHidden achievement" + Rarity(a)
                             : $"{a.Title}\n{a.Description}" + Rarity(a),
+                        Rare = a.Percent.HasValue && a.Percent.Value <= global::RomM.AchievementViews.RareGlow.RareAt,
                     }).ToList();
                     AddBadgeBox(host, "STEAM ACHIEVEMENTS", $"{list.Count} achievements", badges);
                 }));

@@ -1,5 +1,6 @@
 using Playnite.SDK.Models;
 using System;
+using System.Collections.Generic;
 using System.IO;
 
 namespace RomM.Saves.Handlers
@@ -56,7 +57,51 @@ namespace RomM.Saves.Handlers
             foreach (char invalid in Path.GetInvalidFileNameChars())
                 fileName = fileName.Replace(invalid, '_');
 
-            return new LudusaviSaveTarget(exe, workDir, request.Game.Name, fileName + ".zip", request.Logger, customTitle);
+            return new LudusaviSaveTarget(exe, workDir, request.Game.Name, fileName + ".zip", request.Logger, customTitle,
+                SteamEmuCloudFolder(request.Game), InstallFolder(request.Game));
+        }
+
+        // The game's install folder as a real path ({PlayniteDir} expanded); null when not installed.
+        private static string InstallFolder(Game game)
+        {
+            string dir = game?.InstallDirectory;
+            if (string.IsNullOrEmpty(dir) || game.IsInstalled == false)
+                return null;
+            dir = dir.Replace("{PlayniteDir}", AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\', '/'));
+            return Directory.Exists(dir) ? dir : null;
+        }
+
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, KeyValuePair<int, string>> s_steamEmu =
+            new System.Collections.Concurrent.ConcurrentDictionary<string, KeyValuePair<int, string>>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// The Steam emulator's cloud folder for a game run with one (its app id from the
+        /// emulator's files beside steam_api), or null. The look through the install folder is
+        /// done once per folder.
+        /// </summary>
+        private static string SteamEmuCloudFolder(Game game)
+        {
+            try
+            {
+                string installDir = InstallFolder(game);
+                if (installDir == null)
+                    return null;
+                KeyValuePair<int, string> found = s_steamEmu.GetOrAdd(installDir, dir =>
+                {
+                    foreach (string folder in global::RomM.Games.SteamEmuFiles.DllFolders(dir, depth: 9))
+                    {
+                        int appId = global::RomM.Games.SteamEmuFiles.AppIdIn(folder);
+                        if (appId > 0 && global::RomM.Games.SteamEmuFiles.IsEmulatorFolder(folder))
+                            return new KeyValuePair<int, string>(appId, folder);
+                    }
+                    return new KeyValuePair<int, string>(0, null);
+                });
+                return found.Key > 0 ? global::RomM.Games.SteamEmuFiles.CloudFolder(found.Key, found.Value) : null;
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         /// <summary>

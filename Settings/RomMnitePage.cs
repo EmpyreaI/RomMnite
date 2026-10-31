@@ -8,8 +8,9 @@ using System.Windows.Media;
 namespace RomM.Settings
 {
     /// <summary>
-    /// RomMnite's own page of settings: achievements, videos, RetroAchievements sign-in, and
-    /// streaming with Sunshine. Shown as the "RomMnite" category of Playnite's Settings window
+    /// RomMnite's own page of settings, in tabs: Games (videos, updates, emulators), Achievements
+    /// (what game details show, RetroAchievements sign-in), In-game overlay, and Streaming
+    /// (Sunshine). Shown as the "RomMnite" category of Playnite's Settings window
     /// (PlayniteSettingsPage), else in a window of its own from the extension's settings. Its
     /// fields are bound to the extension's settings (SettingsViewModel.Instance); whoever shows it
     /// saves them.
@@ -32,46 +33,66 @@ namespace RomM.Settings
             _model = model;
             DataContext = model;
 
-            var page = new StackPanel { Margin = new Thickness(10, 0, 20, 20), MaxWidth = 760, HorizontalAlignment = HorizontalAlignment.Left };
+            // ---- Games ---------------------------------------------------------------------------
+            StackPanel games = Tab();
+            games.Children.Add(Heading("Videos", first: true));
+            games.Children.Add(Check("Play game videos automatically", nameof(SettingsViewModel.AutoPlayVideos)));
 
-            // Achievements
-            page.Children.Add(Heading("Achievements", first: true));
-            page.Children.Add(Check("Show unlocked achievements in game details", nameof(SettingsViewModel.ShowUnlockedAchievements)));
-            page.Children.Add(Check("Show locked achievements in game details", nameof(SettingsViewModel.ShowLockedAchievements)));
+            games.Children.Add(Heading("Updates"));
+            games.Children.Add(Check("Download game updates automatically", nameof(SettingsViewModel.AutoUpdateGames)));
+            games.Children.Add(Note("Otherwise, the Play button turns into Update."));
 
-            // RetroAchievements
-            page.Children.Add(Heading("RetroAchievements"));
-            page.Children.Add(_raStatus);
-            page.Children.Add(_raActions);
-            page.Children.Add(Note("Signing in lets your emulators earn achievements as you, and shows your progress here. The password is not kept: RetroAchievements gives a login token, kept for this Windows user only."));
 
-            // Videos
-            page.Children.Add(Heading("Videos"));
-            page.Children.Add(Check("Play game videos automatically", nameof(SettingsViewModel.AutoPlayVideos)));
+            // ---- Graphics ----------------------------------------------------------------------
+            StackPanel graphics = Tab();
+            graphics.Children.Add(Heading("Emulators", first: true));
+            graphics.Children.Add(Choice("Resolution", nameof(SettingsViewModel.GraphicsResolution),
+                "Original", "Original", "2x", "2x", "3x", "3x", "4x", "4x", "Match my screen", "Screen"));
+            graphics.Children.Add(Note("Higher is sharper, but harder on your graphics card."));
+            graphics.Children.Add(Check("Widescreen", nameof(SettingsViewModel.GraphicsWidescreen)));
+            graphics.Children.Add(Note("Shows more of the scene in 4:3 games. Some games glitch."));
+            graphics.Children.Add(Check("Stretch to fill the screen", nameof(SettingsViewModel.GraphicsStretch)));
+            graphics.Children.Add(Check("VSync", nameof(SettingsViewModel.GraphicsVSync)));
+            graphics.Children.Add(Note("Stops tearing. Off lowers input lag."));
+            graphics.Children.Add(Note("Applied to every emulator as each game starts."));
 
-            // In-game overlay
-            page.Children.Add(Heading("In-game overlay"));
+            // ---- Achievements ----------------------------------------------------------------------
+            StackPanel achievements = Tab();
+            achievements.Children.Add(Heading("Game details", first: true));
+            achievements.Children.Add(Check("Show unlocked achievements", nameof(SettingsViewModel.ShowUnlockedAchievements)));
+            achievements.Children.Add(Check("Show locked achievements", nameof(SettingsViewModel.ShowLockedAchievements)));
+
+            achievements.Children.Add(Heading("RetroAchievements"));
+            achievements.Children.Add(_raStatus);
+            achievements.Children.Add(_raActions);
+            achievements.Children.Add(Note("Lets your emulators earn achievements on your account."));
+
+            // ---- In-game overlay ------------------------------------------------------------------
+            StackPanel overlay = Tab();
+            overlay.Children.Add(Heading("Opening it", first: true));
             var buttonRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
-            var buttonLabel = Words("Open it with");
+            var buttonLabel = Words("Open the overlay with");
             buttonLabel.VerticalAlignment = VerticalAlignment.Center;
             buttonLabel.Margin = new Thickness(0, 0, 12, 0);
             buttonRow.Children.Add(buttonLabel);
-            var button = new ComboBox { Width = 280, SelectedValuePath = "Tag" };
-            button.Items.Add(new ComboBoxItem { Content = "Home button (Guide)", Tag = "Guide" });
-            button.Items.Add(new ComboBoxItem { Content = "Back + Start, held", Tag = "BackStart" });
-            button.Items.Add(new ComboBoxItem { Content = "L3 + R3 (both sticks), held", Tag = "L3R3" });
-            button.Items.Add(new ComboBoxItem { Content = "Keyboard only (Shift+Tab)", Tag = "None" });
+            var button = new ComboBox { Width = 340, SelectedValuePath = "Tag" };
+            // Each with the controller's own buttons (ControllerGlyphs).
+            Func<string, UIElement> withGlyphs = text =>
+            {
+                var block = new TextBlock { FontSize = 13 };
+                global::RomM.Overlay.ControllerGlyphs.Fill(block, text);
+                return block;
+            };
+            button.Items.Add(new ComboBoxItem { Content = withGlyphs("{Guide}  Home button"), Tag = "Guide" });
+            button.Items.Add(new ComboBoxItem { Content = withGlyphs("{Back} + {Start}  held"), Tag = "BackStart" });
+            button.Items.Add(new ComboBoxItem { Content = withGlyphs("{L3} + {R3}  both sticks pressed in, held"), Tag = "L3R3" });
+            button.Items.Add(new ComboBoxItem { Content = withGlyphs("Keyboard only"), Tag = "None" });
             button.SetBinding(System.Windows.Controls.Primitives.Selector.SelectedValueProperty, new Binding(nameof(SettingsViewModel.OverlayButton)) { Mode = BindingMode.TwoWay });
             buttonRow.Children.Add(button);
-            page.Children.Add(buttonRow);
-            page.Children.Add(Note("Shift+Tab opens it from the keyboard whichever you choose."));
-            page.Children.Add(Check("Show it over Windows games too (they keep running while it's open; Steam games keep Steam's own overlay)", nameof(SettingsViewModel.OverlayForPcGames)));
-            page.Children.Add(Check("Make windowed Windows games borderless", nameof(SettingsViewModel.BorderlessWindowedGames)));
-            page.Children.Add(Note("The overlay can't show over a game in exclusive fullscreen. Set such a game to windowed in its own display settings and this fills the screen with it, without borders, so the overlay works. Best with the game's resolution set to your screen's."));
-            page.Children.Add(Check("Open emulators' own menus with Start + Select (DuckStation, PCSX2, RetroArch, PPSSPP), so the Home button is the overlay's alone", nameof(SettingsViewModel.EmulatorMenusOnStartSelect)));
-            page.Children.Add(Note("Applied as each game starts, and only where you haven't put the emulator's menu on a controller button yourself. Not while the overlay is on Back + Start, which shares those buttons."));
-            page.Children.Add(Check("Render emulated games at your display's resolution (DuckStation, PCSX2, RPCS3, Dolphin, Azahar, Xenia, Vita3K, Flycast, xemu)", nameof(SettingsViewModel.EmulatorsAtDisplayResolution)));
-            page.Children.Add(Note("Applied as each game starts, only where the emulator's resolution is still its default: a resolution you choose in the emulator stays. Sharper, but heavier on the graphics card; lower it in the emulator if a game slows down. Turning this off puts back the emulators' defaults."));
+            overlay.Children.Add(buttonRow);
+            var shiftTab = Note("");
+            global::RomM.Overlay.ControllerGlyphs.Fill(shiftTab, "{Shift} + {Tab} also opens it.");
+            overlay.Children.Add(shiftTab);
             var guideWarning = Note("");
             guideWarning.Foreground = new SolidColorBrush(Color.FromRgb(0xE5, 0xB1, 0x43));
             guideWarning.Opacity = 1;
@@ -81,27 +102,47 @@ namespace RomM.Settings
                 guideWarning.Visibility = by != null ? Visibility.Visible : Visibility.Collapsed;
                 if (by == null)
                     return;
-                string fix = by == "Playnite" ? "Turn off Playnite's own \"Guide button\" setting (Settings, Input)"
-                    : by == "Steam" ? "Close Steam"
-                    : "Turn off \"Open Xbox Game Bar using this button on a controller\" in Windows' Game Bar settings";
-                guideWarning.Text = $"{by} has the Home button right now, so games use Hold Start + Select for the overlay instead (emulators' menus are taken off it then). {fix} for the Home button to open the overlay.";
+                string fix = by == "Playnite" ? "turn off Playnite's Guide button setting"
+                    : by == "Steam" ? "close Steam"
+                    : "turn off the controller button in Game Bar settings";
+                global::RomM.Overlay.ControllerGlyphs.Fill(guideWarning, $"{by} has the Home button, so the overlay uses {{Back}} + {{Start}}. To free it, {fix}.");
             };
-            button.SelectionChanged += (s, e) => showGuideWarning();
-            Loaded += (s, e) => showGuideWarning();
-            page.Children.Add(guideWarning);
+            overlay.Children.Add(guideWarning);
 
-            // Streaming
-            page.Children.Add(Heading("Streaming (Sunshine)"));
-            page.Children.Add(Check("List installed games in Sunshine, so Moonlight can stream them (removed again when uninstalled)", nameof(SettingsViewModel.SunshineEnabled)));
+            // Emulators' own menus: on whichever button the overlay leaves free (EmulatorMenus.For).
+            var menusNow = Note("");
+            overlay.Children.Add(menusNow);
+            Action showMenus = () =>
+            {
+                string chosen = button.SelectedValue as string ?? "Guide";
+                var place = global::RomM.Overlay.GameOverlay.EmulatorMenuButton(chosen, _plugin.Playnite);
+                string words = place == global::RomM.Setup.EmulatorMenus.Place.Home ? "{Guide}"
+                    : place == global::RomM.Setup.EmulatorMenus.Place.StartSelect ? "{Back} + {Start}"
+                    : "{L3} + {R3}";
+                global::RomM.Overlay.ControllerGlyphs.Fill(menusNow, "Emulator menus open with " + words + ".");
+            };
+            button.SelectionChanged += (s, e) => { showGuideWarning(); showMenus(); };
+            Loaded += (s, e) => { showGuideWarning(); showMenus(); };
+
+            overlay.Children.Add(Heading("Windows games"));
+            overlay.Children.Add(Check("Show the overlay over Windows games", nameof(SettingsViewModel.OverlayForPcGames)));
+            overlay.Children.Add(Check("Make windowed games borderless", nameof(SettingsViewModel.BorderlessWindowedGames)));
+            overlay.Children.Add(Note("Lets the overlay show over games set to windowed mode."));
+
+            // ---- Streaming ----------------------------------------------------------------------
+            StackPanel streaming = Tab();
+            streaming.Children.Add(Heading("Sunshine", first: true));
+            streaming.Children.Add(Check("Add installed games to Sunshine", nameof(SettingsViewModel.SunshineEnabled)));
+            streaming.Children.Add(Note("Stream them with Moonlight."));
             var fields = new Grid { Margin = new Thickness(0, 0, 0, 4) };
             fields.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             fields.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             for (int i = 0; i < 3; i++)
                 fields.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             AddField(fields, 0, "Sunshine address", Field(nameof(SettingsViewModel.SunshineUrl)));
-            AddField(fields, 1, "Web UI username", Field(nameof(SettingsViewModel.SunshineUser)));
-            AddField(fields, 2, "Web UI password", _sunshinePassword);
-            page.Children.Add(fields);
+            AddField(fields, 1, "Username", Field(nameof(SettingsViewModel.SunshineUser)));
+            AddField(fields, 2, "Password", _sunshinePassword);
+            streaming.Children.Add(fields);
             _sunshinePassword.Loaded += (s, e) =>
             {
                 _passwordShown = false;
@@ -113,7 +154,7 @@ namespace RomM.Settings
                 if (_passwordShown)
                     _model.SunshinePasswordProtected = global::RomM.Integrations.SunshineSync.Protect(_sunshinePassword.Password);
             };
-            var test = new Button { Content = "Test Sunshine", Padding = new Thickness(10, 2, 10, 2) };
+            var test = new Button { Content = "Test connection", Padding = new Thickness(10, 2, 10, 2) };
             test.Click += async (s, e) =>
             {
                 if (_plugin.Sunshine == null)
@@ -127,17 +168,27 @@ namespace RomM.Settings
             var testRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
             testRow.Children.Add(test);
             testRow.Children.Add(_sunshineResult);
-            page.Children.Add(testRow);
-            page.Children.Add(Note("The name and password are the ones you set up in Sunshine's web UI. Only games RomMnite adds are changed; your other Sunshine apps stay as they are."));
+            streaming.Children.Add(testRow);
 
-            // Credits
-            page.Children.Add(new Separator { Margin = new Thickness(0, 18, 0, 10) });
-            var made = Words("RomMnite " + global::RomM.PluginVersion.Current + " · Created by Empyreai");
+            // ---- The tabs, and who made it beneath them ------------------------------------------
+            var tabs = new TabControl { Margin = new Thickness(10, 0, 20, 0), MaxWidth = 780, HorizontalAlignment = HorizontalAlignment.Left };
+            tabs.Items.Add(new TabItem { Header = "Games", Content = Scroll(games) });
+            tabs.Items.Add(new TabItem { Header = "Graphics", Content = Scroll(graphics) });
+            tabs.Items.Add(new TabItem { Header = "Achievements", Content = Scroll(achievements) });
+            tabs.Items.Add(new TabItem { Header = "In-game overlay", Content = Scroll(overlay) });
+            tabs.Items.Add(new TabItem { Header = "Streaming", Content = Scroll(streaming) });
+
+            var footer = new StackPanel { Margin = new Thickness(10, 12, 20, 10) };
+            var made = Words("RomMnite " + global::RomM.PluginVersion.Current + " · Created by Empyreal");
             made.FontWeight = FontWeights.SemiBold;
-            page.Children.Add(made);
-            page.Children.Add(Note("Based on the RomM Library Importer by The RomM Team, whose work it builds on."));
+            footer.Children.Add(made);
+            footer.Children.Add(Note("Based on the RomM Library Importer by The RomM Team."));
 
-            Content = new ScrollViewer { Content = page, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+            var root = new DockPanel();
+            DockPanel.SetDock(footer, Dock.Bottom);
+            root.Children.Add(footer);
+            root.Children.Add(tabs);
+            Content = root;
 
             Action changed = () => Dispatcher.BeginInvoke(new Action(ShowRetroAchievements));
             Loaded += (s, e) =>
@@ -164,7 +215,7 @@ namespace RomM.Settings
             }
             if (name.Length > 0)
             {
-                _raStatus.Text = $"Not signed in. Your RomM profile's RetroAchievements username is {name}.";
+                _raStatus.Text = $"Not signed in ({name}).";
                 var signIn = new Button { Content = "Sign in to RetroAchievements", Padding = new Thickness(10, 2, 10, 2) };
                 signIn.Click += (s, e) => _plugin.SignInToRetroAchievements();
                 _raActions.Children.Add(signIn);
@@ -172,7 +223,7 @@ namespace RomM.Settings
             }
 
             // No username in the RomM profile yet: entered here, saved there.
-            _raStatus.Text = "Enter your RetroAchievements username. It is saved to your RomM profile, then you can sign in.";
+            _raStatus.Text = "Enter your RetroAchievements username.";
             var field = new TextBox { Width = 220, Margin = new Thickness(0, 0, 8, 0), VerticalContentAlignment = VerticalAlignment.Center };
             var save = new Button { Content = "Save username", Padding = new Thickness(10, 2, 10, 2) };
             var problem = new TextBlock { Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap };
@@ -196,6 +247,12 @@ namespace RomM.Settings
 
         // ---- Pieces ----------------------------------------------------------------------------
 
+        // A tab's page: its sections, one under the other.
+        private static StackPanel Tab() => new StackPanel { Margin = new Thickness(12, 14, 16, 16), MaxWidth = 740, HorizontalAlignment = HorizontalAlignment.Left };
+
+        private static ScrollViewer Scroll(UIElement page) =>
+            new ScrollViewer { Content = page, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+
         private static TextBlock Words(string text)
         {
             var block = new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap };
@@ -212,6 +269,22 @@ namespace RomM.Settings
             panel.Children.Add(title);
             panel.Children.Add(new Separator { Margin = new Thickness(0, 6, 0, 10) });
             return panel;
+        }
+
+        // A label and a drop-down bound to a setting; the choices in pairs, as shown then as saved.
+        private static UIElement Choice(string label, string path, params string[] pairs)
+        {
+            var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
+            var name = Words(label);
+            name.VerticalAlignment = VerticalAlignment.Center;
+            name.Margin = new Thickness(0, 0, 12, 0);
+            row.Children.Add(name);
+            var box = new ComboBox { Width = 200, SelectedValuePath = "Tag" };
+            for (int i = 0; i + 1 < pairs.Length; i += 2)
+                box.Items.Add(new ComboBoxItem { Content = pairs[i], Tag = pairs[i + 1] });
+            box.SetBinding(System.Windows.Controls.Primitives.Selector.SelectedValueProperty, new Binding(path) { Mode = BindingMode.TwoWay });
+            row.Children.Add(box);
+            return row;
         }
 
         private static TextBlock Note(string text)

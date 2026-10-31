@@ -207,7 +207,7 @@ namespace RomM.Games
         /// library update, given a single ROM. Returns null on success, otherwise a sentence
         /// saying why it could not be added.
         /// </summary>
-        public string ImportSingle(int romId, System.Threading.CancellationToken cancel)
+        public string ImportSingle(int romId, System.Threading.CancellationToken cancel, List<RomMImport.LaterArt> artLater = null)
         {
             if (!RomMServerVersion.SupportsImport(_plugin.Settings.ServerVersion))
                 return "RomM server 4.9 or later is required.";
@@ -257,7 +257,7 @@ namespace RomM.Games
 
             // Fan art, logo, video it lacks: another platform's version's.
             _plugin.LendFromOtherVersions(rom);
-            new RomMImport(_plugin, args, mapping, new List<RomMRom> { rom }, favorites, achievements, partial: true).ProcessData();
+            new RomMImport(_plugin, args, mapping, new List<RomMRom> { rom }, favorites, achievements, partial: true) { ArtLater = artLater }.ProcessData();
 
             bool present = _plugin.Playnite.Database.Games.Any(g =>
                 g.PluginId == _plugin.Id && RomMGameId.TryParse(g.GameId, out int id, out string _) && id == romId);

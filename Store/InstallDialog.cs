@@ -18,6 +18,12 @@ namespace RomM.Store
     /// folder, or another install location, or a new one added here), how much room it needs,
     /// and the chosen drive's space as a bar (used, this game, free). Install is only offered
     /// when the game fits. Returns whether to install and where (null: the platform's folder).
+    ///
+    /// The sizes are the server's at first (the size it lists for the game), then, a moment
+    /// later, read from the file itself: its exact size, and for a zip that is unpacked, what it
+    /// unpacks to (its index read by range requests, nothing more downloaded). Unpacking needs
+    /// room for both until the archive is deleted. Without that (the server does not serve
+    /// ranges, or a 7z or rar), an archive is taken to unpack to about its own size again.
     /// </summary>
     internal static class InstallDialog
     {
@@ -42,9 +48,11 @@ namespace RomM.Store
             string platformFolder = Path.GetFileName((mapping?.DestinationPath ?? "").TrimEnd('\\', '/'));
             ulong size = game.InstallSize ?? 0;
             bool unpacks = plugin.UnpacksAfterDownload(game, mapping);
-            // Room for the download and, for an archive, what it unpacks to (about as much again)
-            // until the archive is deleted.
-            ulong needed = unpacks ? size * 2 : size;
+            ulong unpacked = 0;   // known from the zip's index (0: not known)
+            // Room for the download and, for an archive, what it unpacks to (about as much again
+            // until known) until the archive is deleted.
+            Func<ulong> neededNow = () => !unpacks ? size : unpacked > 0 ? size + unpacked : size * 2;
+            ulong needed = neededNow();
 
             var window = api.Dialogs.CreateWindow(new WindowCreationOptions { ShowMinimizeButton = false, ShowMaximizeButton = false, ShowCloseButton = true });
             window.Title = "Install " + game.Name;
@@ -61,11 +69,25 @@ namespace RomM.Store
             var sizes = new Grid { Margin = new Thickness(0, 14, 0, 16) };
             sizes.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             sizes.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            sizes.Children.Add(Fact("DOWNLOAD SIZE", size > 0 ? Size(size) : "Unknown"));
-            var neededFact = Fact("SPACE REQUIRED", size > 0 ? Size(needed) + (unpacks ? " while unpacking" : "") : "Unknown");
+            var downloadFact = Fact("DOWNLOAD SIZE", "");
+            sizes.Children.Add(downloadFact);
+            var neededFact = Fact("SPACE REQUIRED", "");
             Grid.SetColumn(neededFact, 1);
             sizes.Children.Add(neededFact);
             body.Children.Add(sizes);
+            var afterLine = Words("", 12, FontWeights.Normal, 0.6);
+            afterLine.Margin = new Thickness(0, -10, 0, 14);
+            afterLine.Visibility = Visibility.Collapsed;
+            body.Children.Add(afterLine);
+            Action writeSizes = () =>
+            {
+                ((TextBlock)downloadFact.Children[1]).Text = size > 0 ? Size(size) : "Unknown";
+                ((TextBlock)neededFact.Children[1]).Text = size == 0 ? "Unknown"
+                    : (unpacks && unpacked == 0 ? "About " : "") + Size(needed) + (unpacks ? " while unpacking" : "");
+                afterLine.Text = unpacked > 0 ? Size(unpacked) + " once installed" : "";
+                afterLine.Visibility = unpacked > 0 ? Visibility.Visible : Visibility.Collapsed;
+            };
+            writeSizes();
 
             body.Children.Add(Words("INSTALL LOCATION", 11, FontWeights.SemiBold, 0.6));
             var locations = new ComboBox { Margin = new Thickness(0, 6, 0, 12), Height = 34, VerticalContentAlignment = VerticalAlignment.Center };
@@ -198,12 +220,78 @@ namespace RomM.Store
 
             fill(null);
             paint();
+
+            // The exact sizes, from the file on the server, when it says.
+            var reading = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(15));
+            window.Closed += (s, e) => reading.Cancel();
+            string url = DownloadUrl(plugin, game);
+            bool zip = unpacks && url != null && IsZip(plugin, game);
+            if (url != null)
+            {
+                System.Threading.Tasks.Task.Run(async () =>
+                {
+                    try
+                    {
+                        Tuple<long, long?> read = await global::RomM.Games.GameUpdates.RemoteSizes(url, zip, reading.Token).ConfigureAwait(false);
+                        if (reading.IsCancellationRequested || (read.Item1 <= 0 && !read.Item2.HasValue))
+                            return;
+                        await window.Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            if (read.Item1 > 0)
+                                size = (ulong)read.Item1;
+                            if (read.Item2.HasValue && read.Item2.Value > 0)
+                                unpacked = (ulong)read.Item2.Value;
+                            needed = neededNow();
+                            writeSizes();
+                            paint();
+                        }));
+                    }
+                    catch (Exception ex)
+                    {
+                        if (!reading.IsCancellationRequested)
+                            LogManager.GetLogger().Info($"[Install] {game.Name}: the file's size could not be read from the server ({ex.Message}); the listed size is shown.");
+                    }
+                });
+            }
+
             window.ShowDialog();
+            reading.Cancel();
 
             if (!confirmed || current == null)
                 return false;
             root = current.Root;
             return true;
+        }
+
+        // The selected version's download address, or null.
+        private static string DownloadUrl(RomM plugin, Game game)
+        {
+            try
+            {
+                var data = plugin.LoadGameData(game);
+                var revision = data?.ROMVersions?.FirstOrDefault(r => r.IsSelected) ?? data?.ROMVersions?.FirstOrDefault();
+                return string.IsNullOrEmpty(revision?.DownloadURL) ? null : revision.DownloadURL;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        // The download is a zip: a folder sent as one, or a .zip file.
+        private static bool IsZip(RomM plugin, Game game)
+        {
+            try
+            {
+                var data = plugin.LoadGameData(game);
+                var revision = data?.ROMVersions?.FirstOrDefault(r => r.IsSelected) ?? data?.ROMVersions?.FirstOrDefault();
+                return revision != null && (revision.DownloadAsArchive
+                    || string.Equals(Path.GetExtension(revision.FileName ?? ""), ".zip", StringComparison.OrdinalIgnoreCase));
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static string FreeLabel(string folder) =>

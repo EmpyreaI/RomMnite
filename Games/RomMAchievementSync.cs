@@ -287,6 +287,7 @@ namespace RomM.Games
                         Title = a.Title,
                         Description = a.Description,
                         Points = a.Points ?? 0,
+                        Players = a.NumAwarded,
                         BadgeUrl = OwnBadge(a.BadgePath, a.BadgeUrl),
                         BadgeLockedUrl = OwnBadge(a.BadgePathLock, a.BadgeUrlLock),
                         Order = order++,

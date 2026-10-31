@@ -277,6 +277,14 @@ namespace RomM.Games
                     if (stillSame())
                         _plugin.Libraries.ApplyOwned(api, _plugin.Id, accountKey, owned);
                 });
+            // The account's games never brought in here (signed in on this computer after a
+            // while, or added on another one): imported now, then shown by the next sync.
+            List<int> notHere = lib.Where(id => !gameByRom.ContainsKey(id) && !removed.Contains(id)).ToList();
+            if (notHere.Count > 0 && stillSame())
+            {
+                s_log.Info($"[Sync] {notHere.Count} game(s) of the account's library are not on this computer; bringing them in.");
+                _plugin.BringInLibraryGames(notHere);
+            }
             state.LibraryCollectionId = library.Id;
             state.LibraryLast = lib.ToList();
             mine.Remove(library);

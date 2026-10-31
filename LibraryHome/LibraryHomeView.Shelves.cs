@@ -18,7 +18,8 @@ namespace RomM.LibraryHome
     /// choosing what it shows (Favorites and the user's collections; installed games and each
     /// library; Uncategorized, All Games, Recent Games, Currently Playing, Collections View and
     /// Play Next), or deleting it; "Add shelf" at the bottom adds one; and a shelf is dragged
-    /// by its name to a new place. The arrangement is kept (ShelfLayout).
+    /// by the divider bar in its heading (or its name) to a new place. The arrangement is kept
+    /// (ShelfLayout).
     /// </summary>
     public partial class LibraryHomeView
     {
@@ -206,19 +207,9 @@ namespace RomM.LibraryHome
             Border lineBefore = DropLine();
             Border lineAfter = DropLine();
 
-            // The heading: a grip (while pointed at), the name and its drop-down mark, the count,
-            // then the sort (All Games) and the arrows at the right end.
-            var grip = new TextBlock
-            {
-                Text = "\uE76F",
-                FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"),
-                FontSize = 14,
-                Opacity = 0,
-                Margin = new Thickness(0, 0, 8, 0),
-                VerticalAlignment = VerticalAlignment.Center,
-                ToolTip = "Drag to move this shelf",
-            };
-            grip.SetResourceReference(TextBlock.ForegroundProperty, "TextBrush");
+            // The heading, as Steam's: the name and its drop-down mark, the count and the sort
+            // (All Games); then a thin divider line across the rest, which turns into a bar with a
+            // grip while pointed at, to drag the shelf by; then the arrows at the right end.
             var name = Text(title, 17, false);
             name.VerticalAlignment = VerticalAlignment.Center;
             var chevron = new TextBlock
@@ -231,8 +222,7 @@ namespace RomM.LibraryHome
                 VerticalAlignment = VerticalAlignment.Center,
             };
             chevron.SetResourceReference(TextBlock.ForegroundProperty, "TextBrush");
-            var titleBox = new StackPanel { Orientation = Orientation.Horizontal, Background = Brushes.Transparent, Cursor = Cursors.Hand, ToolTip = "Choose what this shelf shows, or drag it to move it" };
-            titleBox.Children.Add(grip);
+            var titleBox = new StackPanel { Orientation = Orientation.Horizontal, Background = Brushes.Transparent, Cursor = Cursors.Hand, ToolTip = "Choose what this shelf shows" };
             titleBox.Children.Add(name);
             titleBox.Children.Add(chevron);
 
@@ -254,9 +244,10 @@ namespace RomM.LibraryHome
                 DockPanel.SetDock(arrows, Dock.Right);
                 heading.Children.Add(arrows);
             }
+            DockPanel.SetDock(head, Dock.Left);
             heading.Children.Add(head);
-            heading.MouseEnter += (s, e) => grip.Opacity = 0.6;
-            heading.MouseLeave += (s, e) => grip.Opacity = 0;
+            FrameworkElement divider = DividerBar();
+            heading.Children.Add(divider);
             if (shelf.Kind == "collection")
             {
                 GameCollection collection = collections.FirstOrDefault(c => c.Id == shelf.CollectionId);
@@ -270,8 +261,65 @@ namespace RomM.LibraryHome
             block.Children.Add(lineAfter);
 
             WireShelfDrag(titleBox, block, shelf, games, collections);
+            WireShelfDrag(divider, block, shelf, games, collections, menuOnClick: false);
             WireShelfDrop(block, shelf, lineBefore, lineAfter);
             return block;
+        }
+
+        // The divider between a shelf's name and its arrows: a faint thin line across the
+        // heading; pointed at, it opens out from the line into a rounded bar with a grip (three
+        // lines) in its middle, and closes back into the line when left.
+        private static FrameworkElement DividerBar()
+        {
+            var area = new Grid
+            {
+                Height = 18,
+                Margin = new Thickness(18, 0, 18, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+                Background = Brushes.Transparent,   // pointed at across its whole height
+                Cursor = Cursors.SizeAll,
+                ToolTip = "Drag to move this shelf",
+            };
+            var line = new Border
+            {
+                Height = 1,
+                VerticalAlignment = VerticalAlignment.Center,
+                Background = new SolidColorBrush(Color.FromArgb(0x26, 0xFF, 0xFF, 0xFF)),
+            };
+            var grip = new TextBlock
+            {
+                Text = "\uE700",
+                FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"),
+                FontSize = 12,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            grip.SetResourceReference(TextBlock.ForegroundProperty, "TextBrush");
+            var open = new ScaleTransform(1, 1 / 18.0);
+            var bar = new Border
+            {
+                CornerRadius = new CornerRadius(3),
+                Background = new SolidColorBrush(Color.FromArgb(0x50, 0xFF, 0xFF, 0xFF)),
+                Child = grip,
+                RenderTransformOrigin = new Point(0.5, 0.5),
+                RenderTransform = open,
+                Opacity = 0,
+            };
+            area.Children.Add(line);
+            area.Children.Add(bar);
+
+            var ease = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut };
+            Action<double, double> animate = (scale, opacity) =>
+            {
+                var time = TimeSpan.FromMilliseconds(160);
+                open.BeginAnimation(ScaleTransform.ScaleYProperty, new System.Windows.Media.Animation.DoubleAnimation(scale, time) { EasingFunction = ease });
+                bar.BeginAnimation(UIElement.OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(opacity, time) { EasingFunction = ease });
+                // The line fades as the bar opens (the bar is see-through: it would show inside it).
+                line.BeginAnimation(UIElement.OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(1 - opacity, time) { EasingFunction = ease });
+            };
+            area.MouseEnter += (s, e) => animate(1, 1);
+            area.MouseLeave += (s, e) => animate(1 / 18.0, 0);
+            return area;
         }
 
         private static UIElement EmptyShelf(string words)
@@ -317,6 +365,30 @@ namespace RomM.LibraryHome
             foreach (Game game in all.Take(MaxAllGames))
                 grid.Children.Add(Tile(game, null, AllWidth, AllHeight, AllGap));
             panel.Children.Add(grid);
+            // Eight across the page as it is with the window maximized (2:3 covers). A smaller
+            // window keeps that size and shows fewer across, as Steam's does.
+            double laidOutFor = 0;
+            grid.SizeChanged += (s, e) =>
+            {
+                double width = grid.ActualWidth;
+                if (width <= 0)
+                    return;
+                double full = width + ScreenWidth.MissingFromMaximized(Window.GetWindow(grid));
+                double cell = Math.Floor(full / AllColumns);
+                double tileWidth = Math.Max(60, cell - AllGap);
+                if (Math.Abs(tileWidth - laidOutFor) < 1)
+                    return;
+                laidOutFor = tileWidth;
+                foreach (FrameworkElement tile in grid.Children.OfType<FrameworkElement>())
+                {
+                    tile.Margin = new Thickness(0, 0, AllGap, AllGap);
+                    if (tile is Border border && border.Child is FrameworkElement frame)
+                    {
+                        frame.Width = tileWidth;
+                        frame.Height = Math.Round(tileWidth * 1.5);
+                    }
+                }
+            };
             if (games.Count > MaxAllGames)
             {
                 var more = Text($"Showing the first {MaxAllGames}. Use the list on the left for the rest.", 12, false);
@@ -480,7 +552,7 @@ namespace RomM.LibraryHome
                 Cursor = Cursors.Hand,
                 Child = words,
             };
-            button.MouseEnter += (s, e) => { button.Background = new SolidColorBrush(Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF)); words.Opacity = 1; };
+            button.MouseEnter += (s, e) => { button.Background = new SolidColorBrush(Color.FromArgb(0x50, 0xFF, 0xFF, 0xFF)); words.Opacity = 1; };
             button.MouseLeave += (s, e) => { button.Background = new SolidColorBrush(Color.FromArgb(0x20, 0xFF, 0xFF, 0xFF)); words.Opacity = 0.75; };
             button.MouseLeftButtonUp += (s, e) =>
             {
@@ -507,7 +579,7 @@ namespace RomM.LibraryHome
 
         // A press on the name that moves a little starts dragging the shelf; one that does not
         // opens its drop-down.
-        private void WireShelfDrag(FrameworkElement handle, FrameworkElement block, ShelfSetting shelf, List<Game> games, List<GameCollection> collections)
+        private void WireShelfDrag(FrameworkElement handle, FrameworkElement block, ShelfSetting shelf, List<Game> games, List<GameCollection> collections, bool menuOnClick = true)
         {
             Point? pressedAt = null;
             handle.PreviewMouseLeftButtonDown += (s, e) => pressedAt = e.GetPosition(this);
@@ -535,6 +607,8 @@ namespace RomM.LibraryHome
                 if (pressedAt == null)
                     return;   // the end of a drag
                 pressedAt = null;
+                if (!menuOnClick)
+                    return;
                 e.Handled = true;
                 OpenShelfMenu(handle, shelf, games, collections);
             };
