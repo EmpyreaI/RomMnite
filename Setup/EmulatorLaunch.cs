@@ -144,6 +144,10 @@ namespace RomM.Setup
             }
         }
 
+        /// <summary>How an emulator is told apart here: its built-in id and its name, lower case.</summary>
+        internal static string IdOf(Emulator emulator) =>
+            emulator == null ? "" : ((emulator.BuiltInConfigId ?? "") + " " + (emulator.Name ?? "")).ToLowerInvariant();
+
         /// <summary>The emulator's own settings, just before a game starts in it.</summary>
         /// <param name="menus">Where the emulators' own menus go (EmulatorMenus.For); null leaves them.</param>
         /// <param name="graphics">Resolution, widescreen, stretching and VSync (EmulatorGraphics); null leaves them.</param>
@@ -152,7 +156,7 @@ namespace RomM.Setup
         {
             if (emulator == null || string.IsNullOrEmpty(installDir))
                 return;
-            string id = ((emulator.BuiltInConfigId ?? "") + " " + (emulator.Name ?? "")).ToLowerInvariant();
+            string id = IdOf(emulator);
             try
             {
                 if (menus.HasValue)

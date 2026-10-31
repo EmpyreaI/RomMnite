@@ -40,7 +40,12 @@ namespace RomM.Store
     /// drop-down at the button's right end, split off by a thin line: one button with a part.
     /// It lists the other copies with what each can do now (Play, Install, its download);
     /// picking one swaps the library over to that copy, whose own button then plays or
-    /// installs it.
+    /// installs it. Its own platform's icon is then drawn left of the words, so which copy the
+    /// button plays is plain (PlatformIcons).
+    ///
+    /// Play turns into "Launching..." at once: the button is drawn so before Playnite is asked to
+    /// start the game, whose start (the cloud saves brought down first, an archive unpacked)
+    /// can hold the window a moment.
     /// </summary>
     public class GameActionButton : PluginUserControl
     {
@@ -58,6 +63,12 @@ namespace RomM.Store
         private readonly RomM _plugin;
         private readonly Border _box;
         private readonly TextBlock _text;
+        // The platform's icon: in greys, lightened toward white (PlatformIcons.Grey), so it sits on
+        // the button like its words and keeps its detail; GreyPlatformIcons off draws it in its
+        // own colours.
+        private const bool GreyPlatformIcons = true;
+        private const double PlatformIconSize = 26;
+        private readonly Image _platformIcon;
         private readonly DispatcherTimer _timer;
 
         // Pause / Resume, beside the button while a download is pointed at: slides out of its
@@ -118,6 +129,20 @@ namespace RomM.Store
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
             };
+            // Taller than the words, without making the button taller (its margins give the room back).
+            var iconMargin = new Thickness(0, -5, 10, -5);
+            _platformIcon = new Image
+            {
+                Width = PlatformIconSize,
+                Height = PlatformIconSize,
+                Margin = iconMargin,
+                VerticalAlignment = VerticalAlignment.Center,
+                Visibility = Visibility.Collapsed,
+            };
+            RenderOptions.SetBitmapScalingMode(_platformIcon, BitmapScalingMode.HighQuality);
+            var label = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
+            label.Children.Add(_platformIcon);
+            label.Children.Add(_text);
             _box = new Border
             {
                 MinWidth = 150,
@@ -126,7 +151,7 @@ namespace RomM.Store
                 CornerRadius = new CornerRadius(2),
                 // A long label ("Emulator Unsupported") is made smaller to fit the button
                 // rather than cut short; a short one keeps its size.
-                Child = new Viewbox { Child = _text, Stretch = Stretch.Uniform, StretchDirection = StretchDirection.DownOnly },
+                Child = new Viewbox { Child = label, Stretch = Stretch.Uniform, StretchDirection = StretchDirection.DownOnly },
             };
             _box.MouseEnter += (s, e) => { _hover = true; Paint(); };
             _box.MouseLeave += (s, e) => { _hover = false; Paint(); };
@@ -400,6 +425,21 @@ namespace RomM.Store
                     break;
             }
             _text.Text = text;
+            // Which platform's copy this is, where there are others.
+            ImageSource icon = null;
+            if (_others > 0 && game != null && (_kind == Kind.Play || _kind == Kind.Install || _kind == Kind.Update || _kind == Kind.Launching || _kind == Kind.Running))
+            {
+                Guid shown = game.Id;
+                icon = PlatformIcons.For(_plugin, game, () =>
+                {
+                    if (_gameId == shown)
+                        Paint();
+                });
+            }
+            if (GreyPlatformIcons && icon != null)
+                icon = PlatformIcons.Grey(icon);
+            _platformIcon.Source = icon;
+            _platformIcon.Visibility = icon != null ? Visibility.Visible : Visibility.Collapsed;
             _box.Background = new SolidColorBrush(color);
             _box.Cursor = clickable ? Cursors.Hand : Cursors.Arrow;
             SlidePause(_over && canPause);
@@ -451,19 +491,64 @@ namespace RomM.Store
             _pauseHolder.BeginAnimation(WidthProperty, slide);
         }
 
+        private static readonly Thickness EntryMargin = new Thickness(6, 6, 18, 6);
+
+        // An entry of the drop-down as tall as what is in it (the theme's entries are one line,
+        // 28 pixels, which cut two lines off), lit when pointed at as the theme's are.
+        private static ControlTemplate s_entryTemplate;
+
+        private static ControlTemplate EntryTemplate()
+        {
+            if (s_entryTemplate != null)
+                return s_entryTemplate;
+            var border = new FrameworkElementFactory(typeof(Border), "Lit");
+            border.SetValue(Border.CornerRadiusProperty, new CornerRadius(10));
+            border.SetValue(Border.BackgroundProperty, Brushes.Transparent);
+            border.SetValue(Border.PaddingProperty, new Thickness(6, 2, 6, 2));
+            var content = new FrameworkElementFactory(typeof(ContentPresenter));
+            content.SetValue(ContentPresenter.ContentSourceProperty, "Header");
+            content.SetValue(ContentPresenter.RecognizesAccessKeyProperty, false);
+            border.AppendChild(content);
+            var template = new ControlTemplate(typeof(MenuItem)) { VisualTree = border };
+            var lit = new Trigger { Property = MenuItem.IsHighlightedProperty, Value = true };
+            lit.Setters.Add(new Setter(Border.BackgroundProperty, new DynamicResourceExtension("ControlHoverBackgroundBrush"), "Lit"));
+            template.Triggers.Add(lit);
+            s_entryTemplate = template;
+            return template;
+        }
+
+        private static MenuItem Entry(UIElement header)
+        {
+            var entry = new MenuItem { Header = header, Template = EntryTemplate() };
+            entry.SetResourceReference(Control.ForegroundProperty, "TextBrush");
+            return entry;
+        }
+
         // The other copies, each with what it can do now.
         private void OpenVersions()
         {
             Game game = _gameId == Guid.Empty ? null : _plugin.Playnite.Database.Games.Get(_gameId);
             if (game == null)
                 return;
-            var menu = new ContextMenu { PlacementTarget = _drop, Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom };
+            // Centred under the arrow, a little below it, with room around its entries.
+            var menu = new ContextMenu
+            {
+                PlacementTarget = _drop,
+                Placement = System.Windows.Controls.Primitives.PlacementMode.Custom,
+                Padding = new Thickness(4, 6, 4, 6),
+                CustomPopupPlacementCallback = (popup, target, offset) => new[]
+                {
+                    new System.Windows.Controls.Primitives.CustomPopupPlacement(
+                        new Point((target.Width - popup.Width) / 2, target.Height + 6),
+                        System.Windows.Controls.Primitives.PopupPrimaryAxis.Horizontal),
+                },
+            };
             if (_kind == Kind.Update)
             {
-                var words = new StackPanel();
+                var words = new StackPanel { Margin = EntryMargin };
                 words.Children.Add(new TextBlock { Text = "Play without updating", FontWeight = FontWeights.SemiBold });
                 words.Children.Add(new TextBlock { Text = _plugin.Updates?.Waiting(game) ?? "The update waits until next time", FontSize = 11, Opacity = 0.7 });
-                var play = new MenuItem { Header = words };
+                MenuItem play = Entry(words);
                 play.Click += (s, e) => PlayWithoutUpdating(game);
                 menu.Items.Add(play);
                 if (_others > 0)
@@ -489,11 +574,21 @@ namespace RomM.Store
                 else
                     action = other.IsInstalled ? "Installed" : "Not installed";
 
-                var words = new StackPanel();
+                var words = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
                 words.Children.Add(new TextBlock { Text = platform, FontWeight = FontWeights.SemiBold });
                 words.Children.Add(new TextBlock { Text = action, FontSize = 11, Opacity = 0.7 });
+                // The platform's icon (in its colours here) before its name.
+                var line = new StackPanel { Orientation = Orientation.Horizontal, Margin = EntryMargin };
+                ImageSource icon = PlatformIcons.For(_plugin, other, null);
+                if (icon != null)
+                {
+                    var picture = new Image { Source = icon, Width = 28, Height = 28, Margin = new Thickness(0, 0, 12, 0), VerticalAlignment = VerticalAlignment.Center };
+                    RenderOptions.SetBitmapScalingMode(picture, BitmapScalingMode.HighQuality);
+                    line.Children.Add(picture);
+                }
+                line.Children.Add(words);
                 // Any copy can be gone to, whatever it is doing.
-                var entry = new MenuItem { Header = words };
+                MenuItem entry = Entry(line);
                 Game target = other;
                 entry.Click += (s, e) =>
                 {
@@ -519,16 +614,36 @@ namespace RomM.Store
             try
             {
                 _plugin.Updates?.PlayWithoutUpdating(game);
-                _plugin.MarkLaunching(game.Id);
-                Refresh(false);
-                _plugin.Playnite.StartGame(game.Id);
-                _plugin.ReleaseIfNotStarted(game.Id);
+                Start(game.Id, game.Name);
             }
             catch (Exception ex)
             {
                 s_log.Warn($"[GameActionButton] Could not start {game.Name} without updating: {ex.Message}");
                 Refresh(true);
             }
+        }
+
+        // "Launching..." drawn first, then the game started once the window has shown it (a
+        // lower priority than drawing): Playnite's start runs on this thread and can hold it.
+        private void Start(Guid gameId, string name)
+        {
+            _plugin.MarkLaunching(gameId);
+            Refresh(false);
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+            {
+                try
+                {
+                    _plugin.Playnite.StartGame(gameId);
+                    // A cancelled choice of file or action: back to Play.
+                    _plugin.ReleaseIfNotStarted(gameId);
+                }
+                catch (Exception ex)
+                {
+                    s_log.Warn($"[GameActionButton] Could not start {name ?? gameId.ToString()}: {ex.Message}");
+                    _plugin.ClearLaunching(gameId);
+                    Refresh(true);
+                }
+            }));
         }
 
         private static string DownloadText(DownloadQueueItem item)
@@ -608,13 +723,7 @@ namespace RomM.Store
                         break;
                     case Kind.Play:
                         if (game != null)
-                        {
-                            _plugin.MarkLaunching(game.Id);
-                            Refresh(false);
-                            _plugin.Playnite.StartGame(game.Id);
-                            // A cancelled choice of file or action: back to Play.
-                            _plugin.ReleaseIfNotStarted(game.Id);
-                        }
+                            Start(game.Id, null);
                         break;
                 }
             }

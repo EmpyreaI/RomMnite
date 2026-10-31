@@ -51,6 +51,34 @@ namespace RomM.Tests
         }
 
         [Fact]
+        public void Reads_what_Steam_starts_it_with_on_Windows_only()
+        {
+            // As the manifest has Cyberpunk 2077's (a Mac app and a Windows launcher).
+            string[] manifest =
+            {
+                "Cyberpunk 2077:",
+                "  files:",
+                "    \"<base>/save\": {}",
+                "  launch:",
+                "    \"<base>/Cyberpunk2077.app\":",
+                "      - when:",
+                "          - os: mac",
+                "            store: steam",
+                "    \"<base>/redprelauncher.exe\":",
+                "      - when:",
+                "          - os: windows",
+                "            store: steam",
+                "    \"<base>/bin/x64/Cyberpunk2077.exe\":",
+                "      - arguments: \"--launcher-skip\"",
+                "  steam:",
+                "    id: 1091500",
+            };
+            LudusaviManifest.Entry entry = LudusaviManifest.Read(manifest, "Cyberpunk 2077");
+            Assert.Equal(new[] { "redprelauncher.exe", "bin/x64/Cyberpunk2077.exe" }, entry.LaunchPaths);
+            Assert.Equal(new[] { "save" }, entry.BasePaths);
+        }
+
+        [Fact]
         public void An_unknown_title_has_no_entry()
         {
             Assert.Null(LudusaviManifest.Read(Manifest, "Metal Gear Solid: Peace Walker"));

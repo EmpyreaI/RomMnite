@@ -116,6 +116,7 @@ namespace RomM.Store
 
         private void ShowCategory(CategoryKind kind, string value, RomMPlatform platform)
         {
+            StoreImages.NewPage();   // this page's pictures before those still waiting from others
             if (Host.Length == 0)
                 return;
 

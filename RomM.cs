@@ -294,6 +294,7 @@ namespace RomM
             SaveAccounts = new SaveAccounts(this, Path.Combine(Playnite.Paths.ExtensionsDataPath, Id.ToString()));
             EmulatorAchievements = new EmulatorAchievements(this, Path.Combine(Playnite.Paths.ExtensionsDataPath, Id.ToString()));
             Updates = new GameUpdates(this, Path.Combine(Playnite.Paths.ExtensionsDataPath, Id.ToString()));
+            LaunchChoices = new LaunchChoices(Path.Combine(Playnite.Paths.ExtensionsDataPath, Id.ToString()));
             ArtCache = new LibraryArtCache(this, Path.Combine(Playnite.Paths.ExtensionsDataPath, Id.ToString()));
             // The community's controller list: handed to the SDL emulators Playnite starts, and read
             // by the library's Controller section; fetched in the background when missing or old.
@@ -537,6 +538,8 @@ namespace RomM
         {
             base.OnApplicationStarted(args);
             Versions?.Start();
+            // What the launch ranking would pick for the installed Windows games, logged only.
+            Task.Delay(TimeSpan.FromSeconds(60)).ContinueWith(_ => LogLaunchRankings());
             // The installed games' sizes on disk, once things have settled (InstallFootprint).
             Task.Delay(TimeSpan.FromSeconds(45)).ContinueWith(_ => InstallFootprint.RefreshAll(Playnite, Id, CancellationToken.None));
             // Windows signing out or shutting down: no question then (FinishBeforeQuit).
@@ -1085,6 +1088,9 @@ namespace RomM
 
         /// <summary>Keeps the account's library and collections in step with RomM's collections.</summary>
         public CollectionSync CollectionsSync { get; }
+
+        /// <summary>The Windows games here whose program to start is asked at their first Play.</summary>
+        internal LaunchChoices LaunchChoices { get; }
 
         /// <summary>Keeps the account's statuses, scores, notes and play time in step with RomM.</summary>
         public UserDataSync UserData { get; }
@@ -2024,6 +2030,7 @@ namespace RomM
             Tuple.Create(new[] { "LOCHideGame", "LOCUnHideGame" }, new[] { "Hide", "Unhide", "Hide this game" }),
             Tuple.Create(new[] { "LOCOpenGameLocation", "LOCOpenInstallLocation" }, new[] { "Open Game Location", "Open game location", "Open Install Location", "Browse local files" }),
             Tuple.Create(new[] { "LOCCreateDesktopShortcut" }, new[] { "Create Desktop Shortcut", "Create desktop shortcut" }),
+            Tuple.Create(new[] { "LOCCalculateInstallSize", "LOCCalculateGameSize", "LOCCalculateGameSizes" }, new[] { "Calculate Install Size", "Calculate install size", "Calculate Game Size", "Calculate game size" }),
             Tuple.Create(new[] { "LOCUninstallGame", "LOCUninstall" }, new[] { "Uninstall" }),
         };
 
@@ -2102,6 +2109,11 @@ namespace RomM
                 {
                     manage = AtTop(menu, new MenuItem { Header = LibraryHome.LibraryHomeView.ManageHeader }, picked[0].Item1);
                 }
+                // Right below Play (or Install): Playnite's first entry, in bold.
+                menu.Items.Remove(manage);
+                MenuItem play = menu.Items.OfType<MenuItem>().FirstOrDefault(i => i.Visibility == System.Windows.Visibility.Visible && i.FontWeight == System.Windows.FontWeights.Bold)
+                                ?? menu.Items.OfType<MenuItem>().FirstOrDefault(i => i.Visibility == System.Windows.Visibility.Visible);
+                menu.Items.Insert(play == null ? 0 : menu.Items.IndexOf(play) + 1, manage);
                 var theirs = manage.Items.Cast<object>().ToList();
                 manage.Items.Clear();
 
@@ -2122,7 +2134,7 @@ namespace RomM
                     foreach (object entry in theirs)
                         manage.Items.Add(entry);
                 }
-                LibraryHome.LibraryHomeView.SyncFirst(manage);
+                LibraryHome.LibraryHomeView.OrderManage(manage);
 
                 // View in RomM at the top of Links and Open Manual at its foot (Links made when the
                 // game has no links of its own but has one of these), and Links just below Manage.
@@ -2794,7 +2806,7 @@ namespace RomM
         RomMPlatform IRomM.KnownPlatformOf(Game game) => KnownPlatformOf(game);
         Setup.EmulatorSetup IRomM.EmulatorSetup => EmulatorSetup;
 
-        private RomMPlatform KnownPlatformOf(Game game)
+        internal RomMPlatform KnownPlatformOf(Game game)
         {
             var names = new HashSet<string>((game.Platforms ?? new List<Platform>()).Select(p => p.Name ?? ""), StringComparer.OrdinalIgnoreCase);
             return names.Count == 0 ? null : Settings?.RomMPlatforms?.FirstOrDefault(p => names.Contains(p.PlayniteName ?? ""));
@@ -3340,6 +3352,19 @@ namespace RomM
                     });
                 }
 
+                // A Windows game's program to start, chosen (Store.LaunchPicker).
+                if (game.IsInstalled && args.Games.Count == 1 && game.PluginId == Id
+                    && Setup.EmulatorSetup.IsWindowsPlatform(KnownPlatformOf(game)))
+                {
+                    Guid choosing = game.Id;
+                    gameMenuItems.Add(new GameMenuItem
+                    {
+                        Description = "Choose what to launch...",
+                        MenuSection = LibraryHome.LibraryHomeView.ManageHeader,
+                        Action = (_) => ChooseLaunch(choosing, playing: false),
+                    });
+                }
+
                 // An update on the server, and checking the game's files against it (Steam's
                 // "Verify integrity of game files").
                 if (game.IsInstalled && args.Games.Count == 1 && Updates?.Get(game.Id) != null)
@@ -3724,6 +3749,32 @@ namespace RomM
                 return;
             }
 
+            // A Windows game whose program was a guess (WindowsLaunch, not sure when it was
+            // installed): the player picks it, once on this computer, then it starts.
+            if (LaunchChoices.IsUnsure(game.Id))
+            {
+                Guid gameId = game.Id;
+                MarkLaunching(gameId);
+                CancelStartup(args, game);
+                Playnite.MainView.UIDispatcher.BeginInvoke(new Action(() =>
+                {
+                    bool ready = false;
+                    try
+                    {
+                        ready = ChooseLaunch(gameId, playing: true);
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Error(ex, $"[Launch] Could not ask what starts {game.Name}.");
+                    }
+                    if (ready)
+                        Playnite.StartGame(gameId);
+                    else
+                        ClearLaunching(gameId);
+                }));
+                return;
+            }
+
             // The signed-in account's own save on disk first, whoever played last; without it the
             // game does not start (it would play, then sync, someone else's save).
             // In emulators with users of their own (RPCS3, Xenia), the account's own user.
@@ -3746,8 +3797,10 @@ namespace RomM
                     // time: the overlay moves to Start + Select when Steam, the Xbox Game Bar or
                     // Playnite has the Home button (Setup.EmulatorMenus.For).
                     Setup.EmulatorMenus.Place menus = Overlay.GameOverlay.EmulatorMenuButton(Settings?.OverlayButton ?? "Guide", Playnite);
-                    Setup.EmulatorLaunch.PrepareSettings(launching.Emulator, PlaynitePath.Resolve(Playnite, launching.Emulator.InstallDir), menus,
-                        Settings?.Graphics() ?? new Setup.GraphicsChoice());
+                    // The platform's graphics (set on its games' pages), the rest recommended.
+                    Setup.GraphicsChoice graphics = Settings?.GraphicsFor(PlatformIdOf(game), Setup.EmulatorLaunch.IdOf(launching.Emulator))
+                        ?? Setup.GraphicsOptions.Recommended(Setup.GraphicsOptions.For(Setup.EmulatorLaunch.IdOf(launching.Emulator)));
+                    Setup.EmulatorLaunch.PrepareSettings(launching.Emulator, PlaynitePath.Resolve(Playnite, launching.Emulator.InstallDir), menus, graphics);
                 }
             }
             catch (Exception ex)
@@ -3963,13 +4016,96 @@ namespace RomM
             return true;
         }
 
+        /// <summary>
+        /// "What starts this game?" for an installed Windows game (Store.LaunchPicker): the
+        /// program picked becomes what it starts with, on this computer. Whether one was picked.
+        /// On the UI thread.
+        /// </summary>
+        internal bool ChooseLaunch(Guid gameId, bool playing)
+        {
+            Game game = Playnite.Database.Games.Get(gameId);
+            if (game == null || !game.IsInstalled)
+                return false;
+            string folder = PlaynitePath.Resolve(Playnite, game.InstallDirectory);
+            string current = PlaynitePath.Resolve(Playnite, game.Roms?.FirstOrDefault()?.Path);
+            // Every program ranked (a .com or .bat set aside), with one chosen when the game was
+            // packed listed first: it can be gone back to.
+            string chosenWhenPacked = WindowsLaunch.Rank(folder, game.Name, RomMInstalledRoms.SupportedTypes(MappingFor(game))).Chosen;
+            WindowsLaunch.Ranking ranking = WindowsLaunch.Rank(folder, game.Name, new List<string> { "exe" });
+            if (chosenWhenPacked != null)
+            {
+                ranking.Candidates.Insert(0, new WindowsLaunch.Candidate
+                {
+                    Path = chosenWhenPacked,
+                    Relative = chosenWhenPacked.Substring(Math.Min(chosenWhenPacked.Length, folder.TrimEnd('\\', '/').Length)).TrimStart('\\', '/'),
+                    Product = "Chosen when the game was packed",
+                    Is64 = WindowsLaunch.Is64Bit(chosenWhenPacked),
+                });
+            }
+
+            string picked = Store.LaunchPicker.Show(Playnite, game, ranking, current, playing);
+            if (picked == null)
+                return false;
+            game = Playnite.Database.Games.Get(gameId);
+            if (game == null)
+                return false;
+            if (!string.Equals(picked, current, StringComparison.OrdinalIgnoreCase))
+            {
+                game.Roms = new System.Collections.ObjectModel.ObservableCollection<GameRom> { new GameRom(game.Name, picked) };
+                Playnite.Database.Games.Update(game);
+                Logger.Info($"[Launch] {game.Name}: starts with {picked} (chosen here; it was {current ?? "nothing"}).");
+            }
+            LaunchChoices.Settled(gameId);
+            return true;
+        }
+
+        /// <summary>
+        /// Once a run, in the background: what WindowsLaunch would pick for each installed Windows
+        /// game, beside what it starts with now, in the log only (nothing is changed), so the
+        /// ranking can be checked against games that already work.
+        /// </summary>
+        private void LogLaunchRankings()
+        {
+            Task.Run(() =>
+            {
+                try
+                {
+                    foreach (Game game in Playnite.Database.Games.Where(g => g.PluginId == Id && g.IsInstalled).ToList())
+                    {
+                        if (!Setup.EmulatorSetup.IsWindowsPlatform(KnownPlatformOf(game)))
+                            continue;
+                        string folder = PlaynitePath.Resolve(Playnite, game.InstallDirectory);
+                        string current = PlaynitePath.Resolve(Playnite, game.Roms?.FirstOrDefault()?.Path);
+                        // A .com is the game's own program renamed: weighed as one, so the check says
+                        // whether the ranking alone would have found what was chosen by hand.
+                        WindowsLaunch.Ranking ranking = WindowsLaunch.Rank(folder, game.Name, new List<string> { "exe" }, comAsPrograms: true);
+                        string would = ranking.Best?.Path;
+                        string verdict = would == null ? "finds nothing"
+                            : string.Equals(would, current, StringComparison.OrdinalIgnoreCase) ? "same"
+                            : "DIFFERENT";
+                        Logger.Info($"[Launch check] {game.Name}: now {current ?? "nothing"}; the ranking alone would pick {would ?? "nothing"} " +
+                                    $"({verdict}, {(ranking.Sure ? "sure" : "would ask")}). Top: {string.Join("; ", ranking.Candidates.Take(3))}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warn($"[Launch check] {ex.Message}");
+                }
+            });
+        }
+
         // What to start of a game just unpacked into a folder, as an install would have found it.
         private List<string> LaunchFilesIn(Game game, string folder, bool windows)
         {
             EmulatorMapping mapping = MappingFor(game);
             List<string> types = RomMInstalledRoms.SupportedTypes(mapping);
             if (windows)
-                return PendingUnpack.WindowsLaunchFiles(folder, types);
+            {
+                List<string> launch = PendingUnpack.WindowsLaunchFiles(folder, types, game.Name, out bool sure);
+                if (!sure && launch.Count > 0)
+                    LaunchChoices.MarkUnsure(game.Id);
+                return launch;
+            }
 
             RomMRomLocal data = LoadGameData(game);
             RomMRevision revision = data?.ROMVersions?.FirstOrDefault(r => r.IsSelected) ?? data?.ROMVersions?.FirstOrDefault();
@@ -4135,8 +4271,11 @@ namespace RomM
                 // Selected while a filter change settles: opened then if it is the only game left.
                 ScheduleSingleResultCheck();
             _selectedGameId = selected != null && selected.Count == 1 ? selected[0].Id : Guid.Empty;
-            // A game picked: its page's art and information load first, background work waits.
+            // A game picked: its page's art and information load first, background work waits,
+            // and its pictures go before any still waiting from other pages (StoreImages).
             Foreground.Touch(TimeSpan.FromSeconds(4));
+            Store.StoreImages.NewPage();
+            BackgroundTiming.Selected(selected != null && selected.Count == 1 ? selected[0] : null, Playnite);
             // Away from a copy picked from its button's drop-down: its game goes back to its usual copy.
             Versions?.Selected(_selectedGameId);
             if (_selectedGameId != Guid.Empty && !CloudStatus.StoreVisible && DateTime.UtcNow > _homeGuardUntil)

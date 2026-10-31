@@ -17,7 +17,7 @@ namespace RomM.LibraryHome
     /// The shelves of the library's Home page, after Steam's: each shelf's name is a drop-down
     /// choosing what it shows (Favorites and the user's collections; installed games and each
     /// library; Uncategorized, All Games, Recent Games, Currently Playing, Collections View and
-    /// Play Next), or deleting it; "Add shelf" at the bottom adds one; and a shelf is dragged
+    /// Play Next), or deleting it; "Add shelf" at the top adds one there; and a shelf is dragged
     /// by the divider bar in its heading (or its name) to a new place. The arrangement is kept
     /// (ShelfLayout).
     /// </summary>
@@ -63,13 +63,15 @@ namespace RomM.LibraryHome
             if (kept == null || _shelves.Count != before)
                 SaveShelves();
 
-            bool first = _whatsNew == null || _whatsNew.Children.Count == 0;
+            // "Add shelf" above the shelves, as Steam has it: a new shelf goes in at the top.
+            // The button is the space above the first shelf.
+            _body.Children.Add(AddShelfButton(games, collections));
+            bool first = true;
             foreach (ShelfSetting shelf in _shelves)
             {
                 _body.Children.Add(ShelfBlock(shelf, games, collections, first));
                 first = false;
             }
-            _body.Children.Add(AddShelfButton(games, collections));
         }
 
         // ---- What a shelf shows ---------------------------------------------------------------
@@ -473,7 +475,7 @@ namespace RomM.LibraryHome
             {
                 if (shelf == null)
                 {
-                    _shelves.Add(picked);
+                    _shelves.Insert(0, picked);
                 }
                 else
                 {
@@ -539,27 +541,79 @@ namespace RomM.LibraryHome
             menu.IsOpen = true;
         }
 
+        // Steam's: "(+) Add shelf" alone in the middle, dim; pointed at, a bar opens out either
+        // side of it across the page (as a shelf's divider does) and the words brighten.
         private UIElement AddShelfButton(List<Game> games, List<GameCollection> collections)
         {
-            var words = Text("+  Add shelf", 13, false);
-            words.Opacity = 0.75;
-            var button = new Border
+            const double BarHeight = 10;
+            var row = new Grid
             {
-                Margin = new Thickness(0, 30, 0, 0),
-                Padding = new Thickness(14, 8, 14, 8),
-                HorizontalAlignment = HorizontalAlignment.Left,
-                Background = new SolidColorBrush(Color.FromArgb(0x20, 0xFF, 0xFF, 0xFF)),
+                Height = 26,
+                Margin = new Thickness(0, 12, 0, 8),
+                Background = Brushes.Transparent,   // pointed at across its whole height
                 Cursor = Cursors.Hand,
-                Child = words,
             };
-            button.MouseEnter += (s, e) => { button.Background = new SolidColorBrush(Color.FromArgb(0x50, 0xFF, 0xFF, 0xFF)); words.Opacity = 1; };
-            button.MouseLeave += (s, e) => { button.Background = new SolidColorBrush(Color.FromArgb(0x20, 0xFF, 0xFF, 0xFF)); words.Opacity = 0.75; };
-            button.MouseLeftButtonUp += (s, e) =>
+            row.ColumnDefinitions.Add(new ColumnDefinition());
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row.ColumnDefinitions.Add(new ColumnDefinition());
+
+            var ease = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut };
+            var bars = new List<ScaleTransform>();
+            var barViews = new List<Border>();
+            for (int side = 0; side < 2; side++)
+            {
+                var scale = new ScaleTransform(1, 1 / BarHeight);
+                var bar = new Border
+                {
+                    Height = BarHeight,
+                    CornerRadius = new CornerRadius(2),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Background = new SolidColorBrush(Color.FromArgb(0x30, 0xFF, 0xFF, 0xFF)),
+                    RenderTransformOrigin = new Point(0.5, 0.5),
+                    RenderTransform = scale,
+                    Opacity = 0,
+                };
+                Grid.SetColumn(bar, side == 0 ? 0 : 2);
+                row.Children.Add(bar);
+                bars.Add(scale);
+                barViews.Add(bar);
+            }
+
+            var label = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(14, 0, 14, 0), VerticalAlignment = VerticalAlignment.Center };
+            var plus = new TextBlock
+            {
+                Text = "\uECC8",
+                FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"),
+                FontSize = 15,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 1, 7, 0),
+            };
+            plus.SetResourceReference(TextBlock.ForegroundProperty, "TextBrush");
+            var words = Text("Add shelf", 13, false);
+            words.VerticalAlignment = VerticalAlignment.Center;
+            label.Children.Add(plus);
+            label.Children.Add(words);
+            label.Opacity = 0.6;
+            Grid.SetColumn(label, 1);
+            row.Children.Add(label);
+
+            Action<bool> light = on =>
+            {
+                var time = TimeSpan.FromMilliseconds(160);
+                foreach (ScaleTransform scale in bars)
+                    scale.BeginAnimation(ScaleTransform.ScaleYProperty, new System.Windows.Media.Animation.DoubleAnimation(on ? 1 : 1 / BarHeight, time) { EasingFunction = ease });
+                foreach (Border bar in barViews)
+                    bar.BeginAnimation(UIElement.OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(on ? 1 : 0, time) { EasingFunction = ease });
+                label.BeginAnimation(UIElement.OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(on ? 1 : 0.6, time) { EasingFunction = ease });
+            };
+            row.MouseEnter += (s, e) => light(true);
+            row.MouseLeave += (s, e) => light(false);
+            row.MouseLeftButtonUp += (s, e) =>
             {
                 e.Handled = true;
-                OpenShelfMenu(button, null, games, collections);
+                OpenShelfMenu(label, null, games, collections);
             };
-            return button;
+            return row;
         }
 
         // ---- Moving a shelf --------------------------------------------------------------------

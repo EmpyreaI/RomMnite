@@ -116,55 +116,26 @@ namespace RomM.Games
             }
         }
 
-        // Programs in a game's folder that are not the game.
-        private static readonly string[] NotTheGame =
-        {
-            "unins", "setup", "install", "vcredist", "vc_redist", "dxsetup", "dxwebsetup", "directx", "dotnet", "ndp",
-            "oalinst", "physx", "crash", "report", "helper", "launcherpatcher", "updater", "update", "config", "settings",
-        };
-
         /// <summary>
-        /// What to start of a Windows game unpacked into a folder: its own .com or .bat (how the
-        /// server's Windows games are packed: see EmulatorSetup.SetUpWindows), else its likeliest
-        /// .exe -- the one nearest the top of the folder that is not an installer, uninstaller,
-        /// redistributable or helper, the largest of those at the same depth. Empty when none.
+        /// What to start of a Windows game unpacked into a folder (WindowsLaunch: its own .com or
+        /// .bat, else its likeliest .exe), with whether that is sure. Empty when there is none.
         /// </summary>
-        public static List<string> WindowsLaunchFiles(string folder, IList<string> types)
-        {
-            var found = new List<string>();
-            if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder))
-                return found;
-            var kinds = (types != null && types.Count > 0 ? types : new List<string> { "com", "bat" })
-                .Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => "." + t.TrimStart('.')).ToList();
-            string launcher = Directory.GetFiles(folder, "*", SearchOption.AllDirectories)
-                .Where(f => kinds.Any(k => string.Equals(Path.GetExtension(f), k, StringComparison.OrdinalIgnoreCase)))
-                .OrderBy(f => Depth(folder, f))
-                .ThenBy(f => f, StringComparer.OrdinalIgnoreCase)
-                .FirstOrDefault();
-            if (launcher != null)
-            {
-                found.Add(launcher);
-                return found;
-            }
+        public static List<string> WindowsLaunchFiles(string folder, IList<string> types, string title = null)
+            => WindowsLaunchFiles(folder, types, title, out bool _);
 
-            string exe = Directory.GetFiles(folder, "*.exe", SearchOption.AllDirectories)
-                .Where(f =>
-                {
-                    string name = Path.GetFileNameWithoutExtension(f).ToLowerInvariant();
-                    return !NotTheGame.Any(n => name.StartsWith(n) || name.Contains("_" + n) || name.Contains("-" + n))
-                           && !f.Split(Path.DirectorySeparatorChar).Any(part => part.Equals("_CommonRedist", StringComparison.OrdinalIgnoreCase)
-                                                                              || part.Equals("Redist", StringComparison.OrdinalIgnoreCase)
-                                                                              || part.Equals("DirectX", StringComparison.OrdinalIgnoreCase));
-                })
-                .OrderBy(f => Depth(folder, f))
-                .ThenByDescending(f => new FileInfo(f).Length)
-                .FirstOrDefault();
-            if (exe != null)
-                found.Add(exe);
+        public static List<string> WindowsLaunchFiles(string folder, IList<string> types, string title, out bool sure)
+        {
+            WindowsLaunch.Ranking ranking = WindowsLaunch.Rank(folder, title, types);
+            sure = ranking.Sure;
+            var found = new List<string>();
+            if (ranking.BestPath != null)
+            {
+                found.Add(ranking.BestPath);
+                s_log.Info($"[Launch] {title ?? folder}: starts with {ranking.BestPath}" +
+                           (ranking.Chosen != null ? " (chosen when packed)" : sure ? "" : " (not sure: asked at the first Play)") +
+                           (ranking.Best != null ? $"; {string.Join("; ", ranking.Candidates.Take(4))}" : ""));
+            }
             return found;
         }
-
-        private static int Depth(string root, string file) =>
-            file.Substring(Math.Min(file.Length, root.TrimEnd('\\', '/').Length)).Count(c => c == '\\' || c == '/');
     }
 }

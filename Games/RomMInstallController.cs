@@ -129,10 +129,16 @@ namespace RomM.Games
                     }
 
                     // A Windows game packed without a .com or .bat: its own program.
+                    // (WindowsLaunch: the likeliest .exe; asked about at the first Play when that
+                    // is not sure.)
                     if (roms.Count == 0 && windows)
                     {
-                        foreach (var f in PendingUnpack.WindowsLaunchFiles(installDir, supported))
+                        foreach (var f in PendingUnpack.WindowsLaunchFiles(installDir, supported, Game.Name, out bool sure))
+                        {
                             roms.Add(new GameRom(Game.Name, f));
+                            if (!sure)
+                                (_romM as RomM)?.LaunchChoices?.MarkUnsure(Game.Id);
+                        }
                     }
 
                     return roms;

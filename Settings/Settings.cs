@@ -264,23 +264,19 @@ namespace RomM.Settings
         // Game updates on the server downloaded as soon as a library update finds them (Games/GameUpdates).
         public bool AutoUpdateGames { get; set; } = false;
 
-        // Emulators' graphics, written into each emulator's settings as a game starts
-        // (Setup/EmulatorGraphics): resolution "Original", "2x", "3x", "4x" or "Screen",
-        // widescreen, stretching to fill the screen, VSync.
-        public string GraphicsResolution { get; set; } = null;
-        public bool GraphicsWidescreen { get; set; } = false;
-        public bool GraphicsStretch { get; set; } = false;
-        public bool GraphicsVSync { get; set; } = true;
-        // Before the resolution choice: on was "Screen", off "Original". Read to carry it over.
-        public bool EmulatorsAtDisplayResolution { get; set; } = true;
+        // Each platform's graphics, by RomM platform id, set on its games' pages (Games/
+        // EmulationStatusControl) and written into its emulator's settings as a game starts
+        // (Setup/EmulatorGraphics). A platform not here, or a choice left null, is recommended
+        // (Setup/GraphicsOptions).
+        public Dictionary<string, global::RomM.Setup.PlatformGraphics> PlatformGraphics { get; set; } = new Dictionary<string, global::RomM.Setup.PlatformGraphics>();
 
-        internal global::RomM.Setup.GraphicsChoice Graphics() => new global::RomM.Setup.GraphicsChoice
+        /// <summary>The platform's graphics for an emulator (its built-in id and name, lower case).</summary>
+        internal global::RomM.Setup.GraphicsChoice GraphicsFor(int platformId, string emulatorId)
         {
-            Resolution = GraphicsResolution ?? "Screen",
-            Widescreen = GraphicsWidescreen,
-            Stretch = GraphicsStretch,
-            VSync = GraphicsVSync,
-        };
+            global::RomM.Setup.PlatformGraphics saved = null;
+            PlatformGraphics?.TryGetValue(platformId.ToString(System.Globalization.CultureInfo.InvariantCulture), out saved);
+            return global::RomM.Setup.GraphicsOptions.Resolve(saved, emulatorId);
+        }
 
         // Sunshine (game streaming): installed games listed in it as applications (Integrations/
         // SunshineSync), through its web API with its web UI's name and password. The password
@@ -415,11 +411,7 @@ namespace RomM.Settings
                 OverlayForPcGames = savedSettings.OverlayForPcGames;
                 BorderlessWindowedGames = savedSettings.BorderlessWindowedGames;
                 AutoUpdateGames = savedSettings.AutoUpdateGames;
-                EmulatorsAtDisplayResolution = savedSettings.EmulatorsAtDisplayResolution;
-                GraphicsResolution = savedSettings.GraphicsResolution ?? (savedSettings.EmulatorsAtDisplayResolution ? "Screen" : "Original");
-                GraphicsWidescreen = savedSettings.GraphicsWidescreen;
-                GraphicsStretch = savedSettings.GraphicsStretch;
-                GraphicsVSync = savedSettings.GraphicsVSync;
+                PlatformGraphics = savedSettings.PlatformGraphics ?? new Dictionary<string, global::RomM.Setup.PlatformGraphics>();
                 SunshineEnabled = savedSettings.SunshineEnabled;
                 SunshineUrl = string.IsNullOrWhiteSpace(savedSettings.SunshineUrl) ? "https://localhost:47990" : savedSettings.SunshineUrl;
                 SunshineUser = savedSettings.SunshineUser ?? "";
@@ -447,8 +439,8 @@ namespace RomM.Settings
 
             ProfilePath = ResolveProfilePath();
 
-            if (GraphicsResolution == null)
-                GraphicsResolution = "Screen";
+            if (PlatformGraphics == null)
+                PlatformGraphics = new Dictionary<string, global::RomM.Setup.PlatformGraphics>();
 
             if (forceSave)
             {

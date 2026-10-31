@@ -21,7 +21,12 @@ namespace RomM.Games
     /// (applied for this game only, on request), and the community's patches for it, fixes first,
     /// each switched on or off here. PlayStation 1-3 and Vita games (CompatLists): the verdict of
     /// DuckStation's, PCSX2's, RPCS3's or Vita3K's list, its notes, and the fixes PCSX2 applies
-    /// by itself. Hidden for platforms with no list.
+    /// by itself.
+    ///
+    /// Then the platform's graphics (Setup.GraphicsOptions), for every game of the platform:
+    /// resolution, and widescreen, stretching and VSync where its emulator has them, each
+    /// starting at what is recommended; a change is kept at once and written into the emulator
+    /// as the next game starts. Hidden when there is neither a list nor graphics to set.
     /// </summary>
     public class EmulationStatusControl : PluginUserControl
     {
@@ -32,6 +37,9 @@ namespace RomM.Games
 
         private readonly RomM _plugin;
         private readonly StackPanel _body = new StackPanel();
+        private readonly StackPanel _status = new StackPanel();     // the compatibility list's
+        private readonly StackPanel _graphics = new StackPanel();   // the platform's graphics
+        private Border _graphicsLine;
         private Game _game;
         private int _asked;
 
@@ -41,6 +49,8 @@ namespace RomM.Games
             Focusable = false;
             var title = new TextBlock { Text = "Emulation" };
             title.SetResourceReference(StyleProperty, "DetailViewSectionTitleTextBlockStyle");
+            _body.Children.Add(_status);
+            _body.Children.Add(_graphics);
             var card = new Border { Padding = new Thickness(16, 14, 16, 14), Margin = new Thickness(0, 12, 0, 0), Child = _body };
             card.SetResourceReference(StyleProperty, "DetailViewCardBorder");
             card.SetResourceReference(Border.CornerRadiusProperty, "ControlCornerRadius");
@@ -57,6 +67,8 @@ namespace RomM.Games
             Visibility = Visibility.Collapsed;
             int ask = ++_asked;
             Game game = newContext;
+            _status.Children.Clear();
+            ShowGraphics(game);
             string spec = newContext?.Platforms?.Select(p => p?.SpecificationId).FirstOrDefault(id => !string.IsNullOrEmpty(id)) ?? "";
             if (!IsXbox360(newContext) && CompatLists.Covers(spec) && _plugin.CompatLists != null)
             {
@@ -153,8 +165,8 @@ namespace RomM.Games
         // Another emulator's list: its verdict, notes and the fixes it applies by itself.
         private void ShowList(CompatReport report)
         {
-            _body.Children.Clear();
-            Visibility = Visibility.Visible;
+            _status.Children.Clear();
+            StatusShown();
             Brush tone = report.Tone == 0 ? Good : report.Tone == 1 ? Warning : report.Tone == 2 ? Bad : null;
             var icon = new TextBlock
             {
@@ -185,14 +197,14 @@ namespace RomM.Games
             DockPanel.SetDock(icon, Dock.Left);
             row.Children.Add(icon);
             row.Children.Add(words);
-            _body.Children.Add(row);
+            _status.Children.Add(row);
 
             if (report.AutoFixes.Count > 0)
             {
                 var section = Section($"Fixed automatically by {report.Emulator}");
                 foreach (string fix in report.AutoFixes)
                     section.Children.Add(Line("\u2022  " + fix, muted: true));
-                _body.Children.Add(section);
+                _status.Children.Add(section);
             }
         }
 
@@ -219,8 +231,8 @@ namespace RomM.Games
 
         private void Show(Game game, XeniaReport report)
         {
-            _body.Children.Clear();
-            Visibility = Visibility.Visible;
+            _status.Children.Clear();
+            StatusShown();
             string xenia = XeniaFolder(game);
 
             // The verdict.
@@ -263,7 +275,7 @@ namespace RomM.Games
             DockPanel.SetDock(icon, Dock.Left);
             row.Children.Add(icon);
             row.Children.Add(words);
-            _body.Children.Add(row);
+            _status.Children.Add(row);
             if (report == null)
                 return;
 
@@ -287,20 +299,20 @@ namespace RomM.Games
                 section.Children.Add(Line("Takes effect the next time the game starts.", muted: true));
                 if (xenia == null)
                     section.Children.Add(Line("Set up Xenia for this platform first.", muted: true));
-                _body.Children.Add(section);
+                _status.Children.Add(section);
             }
 
             // The community's patches: fixes first, the rest (60 FPS, widescreen...) after.
             var fixes = report.Patches.Where(p => p.IsFix).ToList();
             var others = report.Patches.Where(p => !p.IsFix).ToList();
             if (fixes.Count > 0)
-                _body.Children.Add(PatchList("Fixes available", fixes, xenia, report));
+                _status.Children.Add(PatchList("Fixes available", fixes, xenia, report));
             if (others.Count > 0)
-                _body.Children.Add(PatchList(fixes.Count > 0 ? "Other patches" : "Patches available", others, xenia, report));
+                _status.Children.Add(PatchList(fixes.Count > 0 ? "Other patches" : "Patches available", others, xenia, report));
             if (report.Patches.Count > 0 && xenia == null)
-                _body.Children.Add(Line("Set up Xenia for this platform to switch patches on.", muted: true));
+                _status.Children.Add(Line("Set up Xenia for this platform to switch patches on.", muted: true));
             else if (report.Patches.Count > 0)
-                _body.Children.Add(Line("Patches switched here take effect the next time the game starts.", muted: true));
+                _status.Children.Add(Line("Patches switched here take effect the next time the game starts.", muted: true));
         }
 
         private StackPanel PatchList(string heading, List<XeniaPatch> patches, string xenia, XeniaReport report)
@@ -336,6 +348,143 @@ namespace RomM.Games
             }
             return section;
         }
+
+        // ---- The platform's graphics ---------------------------------------------------------
+
+        // The card shows: the line above Graphics only when the list's verdict is above it.
+        private void StatusShown()
+        {
+            Visibility = Visibility.Visible;
+            if (_graphicsLine != null)
+                _graphicsLine.Visibility = Visibility.Visible;
+        }
+
+        private void ShowGraphics(Game game)
+        {
+            _graphics.Children.Clear();
+            _graphicsLine = null;
+            try
+            {
+                if (game == null || game.PluginId != _plugin.Id || _plugin.Settings == null)
+                    return;
+                int platformId = _plugin.PlatformIdOf(game);
+                var mapping = _plugin.MappingForPlatform(platformId) ?? _plugin.MappingFor(game);
+                Emulator emulator = mapping?.Emulator;
+                if (platformId <= 0 || emulator == null)
+                    return;
+                string id = Setup.EmulatorLaunch.IdOf(emulator);
+                Setup.GraphicsOptions.Support support = Setup.GraphicsOptions.For(id);
+                if (support == null)
+                    return;   // an emulator RomMnite sets no graphics for
+                string platform = _plugin.KnownPlatformOf(game)?.PlayniteName ?? "this platform";
+                string key = platformId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                Setup.GraphicsChoice recommended = Setup.GraphicsOptions.Recommended(support);
+
+                Func<Setup.PlatformGraphics> saved = () =>
+                {
+                    _plugin.Settings.PlatformGraphics.TryGetValue(key, out Setup.PlatformGraphics kept);
+                    return kept;
+                };
+                // A change kept at once (null where it is the recommended one).
+                Action<Action<Setup.PlatformGraphics>> change = set =>
+                {
+                    Setup.PlatformGraphics kept = saved() ?? new Setup.PlatformGraphics();
+                    set(kept);
+                    if (kept.Resolution == recommended.Resolution) kept.Resolution = null;
+                    if (kept.Widescreen == recommended.Widescreen) kept.Widescreen = null;
+                    if (kept.Stretch == recommended.Stretch) kept.Stretch = null;
+                    if (kept.VSync == recommended.VSync) kept.VSync = null;
+                    if (kept.IsEmpty)
+                        _plugin.Settings.PlatformGraphics.Remove(key);
+                    else
+                        _plugin.Settings.PlatformGraphics[key] = kept;
+                    _plugin.Settings.Persist();
+                    s_log.Info($"[Graphics] {platform}: {Describe(Setup.GraphicsOptions.Resolve(saved(), id))}.");
+                    ShowGraphics(game);
+                };
+                Setup.GraphicsChoice now = Setup.GraphicsOptions.Resolve(saved(), id);
+
+                var section = Section("Graphics");
+                _graphicsLine = section.Children[0] as Border;
+                if (_graphicsLine != null)
+                    _graphicsLine.Visibility = _status.Children.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+                if (_status.Children.Count == 0)
+                    section.Margin = new Thickness(0);
+                section.Children.Add(Line($"For every {platform} game, in {emulator.Name}.", muted: true));
+
+                // Resolution.
+                var resolution = new ComboBox { MinWidth = 200, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 8, 0, 0) };
+                foreach (var option in Setup.GraphicsOptions.Resolutions)
+                {
+                    string label = option.Value + (option.Key == recommended.Resolution ? " (recommended)" : "");
+                    resolution.Items.Add(new ComboBoxItem { Content = label, Tag = option.Key });
+                }
+                resolution.SelectedItem = resolution.Items.Cast<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag == now.Resolution) ?? resolution.Items[0];
+                resolution.SelectionChanged += (s, e) =>
+                {
+                    string picked = (resolution.SelectedItem as ComboBoxItem)?.Tag as string;
+                    if (picked != null && picked != now.Resolution)
+                        change(k => k.Resolution = picked);
+                };
+                var resolutionRow = new StackPanel();
+                resolutionRow.Children.Add(Line("Resolution", muted: false));
+                resolutionRow.Children.Add(resolution);
+                resolutionRow.Children.Add(Line("Higher is sharper, but harder on your graphics card.", muted: true));
+                resolutionRow.Margin = new Thickness(0, 6, 0, 0);
+                section.Children.Add(resolutionRow);
+
+                if (support.Widescreen)
+                    section.Children.Add(Toggle("Widescreen", support.WidescreenNote, now.Widescreen, recommended.Widescreen, on => change(k => k.Widescreen = on)));
+                if (support.Stretch)
+                    section.Children.Add(Toggle("Stretch to fill the screen", null, now.Stretch, recommended.Stretch, on => change(k => k.Stretch = on)));
+                section.Children.Add(Toggle("VSync", "Stops tearing. Off lowers input lag.", now.VSync, recommended.VSync, on => change(k => k.VSync = on)));
+
+                // Back to what is recommended, when anything differs.
+                if (saved() != null)
+                {
+                    var reset = new Button { Content = "Use recommended", HorizontalAlignment = HorizontalAlignment.Left, Padding = new Thickness(10, 2, 10, 2), Margin = new Thickness(0, 10, 0, 0) };
+                    reset.Click += (s, e) =>
+                    {
+                        _plugin.Settings.PlatformGraphics.Remove(key);
+                        _plugin.Settings.Persist();
+                        s_log.Info($"[Graphics] {platform}: back to recommended.");
+                        ShowGraphics(game);
+                    };
+                    section.Children.Add(reset);
+                }
+                section.Children.Add(Line("Takes effect the next time a game starts.", muted: true));
+                _graphics.Children.Add(section);
+                Visibility = Visibility.Visible;
+            }
+            catch (Exception ex)
+            {
+                s_log.Warn($"[Graphics] Could not show the platform's graphics: {ex.Message}");
+            }
+        }
+
+        private static FrameworkElement Toggle(string label, string note, bool on, bool recommended, Action<bool> changed)
+        {
+            var panel = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
+            // "(recommended)" beside the ones recommended on.
+            var box = new CheckBox
+            {
+                Content = new TextBlock { Text = label + (recommended ? " (recommended)" : ""), TextWrapping = TextWrapping.Wrap },
+                IsChecked = on,
+            };
+            box.Click += (s, e) => changed(box.IsChecked == true);
+            panel.Children.Add(box);
+            if (!string.IsNullOrEmpty(note))
+            {
+                var desc = Line(note, muted: true);
+                desc.Margin = new Thickness(28, 0, 0, 2);
+                desc.FontSize = 11.5;
+                panel.Children.Add(desc);
+            }
+            return panel;
+        }
+
+        private static string Describe(Setup.GraphicsChoice g) =>
+            $"resolution {g.Resolution}, widescreen {(g.Widescreen ? "on" : "off")}, stretch {(g.Stretch ? "on" : "off")}, VSync {(g.VSync ? "on" : "off")}";
 
         // ---- What the labels mean ------------------------------------------------------------
 

@@ -668,6 +668,7 @@ namespace RomM.Store
         /// <summary>Every game on the server, on a page like a category's.</summary>
         private void ShowAllGames()
         {
+            StoreImages.NewPage();   // this page's pictures before those still waiting from others
             ShowCategory(CategoryKind.All, "All Games", null);
         }
 
@@ -1215,6 +1216,7 @@ namespace RomM.Store
 
         private void ShowPlatforms(List<RomMPlatform> platforms)
         {
+            StoreImages.NewPage();   // this page's pictures before those still waiting from others
             _platforms.Items.Clear();
             _platforms.Items.Add(new ListBoxItem { Content = "Home", Tag = HomeTag, Padding = new Thickness(8, 6, 8, 6) });
             _platforms.Items.Add(new ListBoxItem { Content = $"All games  ({platforms.Sum(p => p.RomCount)})", Tag = null, Padding = new Thickness(8, 6, 8, 6) });
@@ -1463,6 +1465,7 @@ namespace RomM.Store
 
         private void ShowGames(List<RomMRom> roms, int total, string term)
         {
+            StoreImages.NewPage();   // this page's pictures before those still waiting from others
             _total = total;
             _shownRoms = roms;
             _shownTerm = term;
@@ -1632,6 +1635,7 @@ namespace RomM.Store
 
         private void ShowBrowse()
         {
+            StoreImages.NewPage();   // this page's pictures before those still waiting from others
             CloseHoverCard();
             StopHoverVideo();
             StopSlideshow();
@@ -1690,6 +1694,7 @@ namespace RomM.Store
 
         private void ShowGame(RomMRom rom)
         {
+            StoreImages.NewPage();   // this page's pictures before those still waiting from others
             _currentRom = rom;
             NoteViewed(rom);
             RecordStore(new Account.NavEntry { Store = true, Kind = "game", Id = rom.Id }, false);

@@ -43,19 +43,6 @@ namespace RomM.Settings
             games.Children.Add(Note("Otherwise, the Play button turns into Update."));
 
 
-            // ---- Graphics ----------------------------------------------------------------------
-            StackPanel graphics = Tab();
-            graphics.Children.Add(Heading("Emulators", first: true));
-            graphics.Children.Add(Choice("Resolution", nameof(SettingsViewModel.GraphicsResolution),
-                "Original", "Original", "2x", "2x", "3x", "3x", "4x", "4x", "Match my screen", "Screen"));
-            graphics.Children.Add(Note("Higher is sharper, but harder on your graphics card."));
-            graphics.Children.Add(Check("Widescreen", nameof(SettingsViewModel.GraphicsWidescreen)));
-            graphics.Children.Add(Note("Shows more of the scene in 4:3 games. Some games glitch."));
-            graphics.Children.Add(Check("Stretch to fill the screen", nameof(SettingsViewModel.GraphicsStretch)));
-            graphics.Children.Add(Check("VSync", nameof(SettingsViewModel.GraphicsVSync)));
-            graphics.Children.Add(Note("Stops tearing. Off lowers input lag."));
-            graphics.Children.Add(Note("Applied to every emulator as each game starts."));
-
             // ---- Achievements ----------------------------------------------------------------------
             StackPanel achievements = Tab();
             achievements.Children.Add(Heading("Game details", first: true));
@@ -173,7 +160,6 @@ namespace RomM.Settings
             // ---- The tabs, and who made it beneath them ------------------------------------------
             var tabs = new TabControl { Margin = new Thickness(10, 0, 20, 0), MaxWidth = 780, HorizontalAlignment = HorizontalAlignment.Left };
             tabs.Items.Add(new TabItem { Header = "Games", Content = Scroll(games) });
-            tabs.Items.Add(new TabItem { Header = "Graphics", Content = Scroll(graphics) });
             tabs.Items.Add(new TabItem { Header = "Achievements", Content = Scroll(achievements) });
             tabs.Items.Add(new TabItem { Header = "In-game overlay", Content = Scroll(overlay) });
             tabs.Items.Add(new TabItem { Header = "Streaming", Content = Scroll(streaming) });

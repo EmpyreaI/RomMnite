@@ -34,6 +34,33 @@ namespace RomM.AchievementViews
         /// <summary>A hidden trophy or secret achievement not unlocked yet: shown as such.</summary>
         public bool Hidden { get; set; }
 
+        /// <summary>
+        /// A locked one's progress, where its source keeps it (a Steam emulator's, for achievements
+        /// tied to a stat): so far, and what unlocks it. Null when not known.
+        /// </summary>
+        public double? ProgressValue { get; set; }
+        public double? ProgressMax { get; set; }
+
+        /// <summary>How far along a locked one is, 0 to 1; null when not known (or unlocked).</summary>
+        [JsonIgnore]
+        public double? ProgressShare => !Unlocked && ProgressMax.HasValue && ProgressMax.Value > 0 && ProgressValue.HasValue
+            ? Math.Max(0, Math.Min(1, ProgressValue.Value / ProgressMax.Value))
+            : (double?)null;
+
+        /// <summary>A locked one with some progress made.</summary>
+        [JsonIgnore]
+        public bool InProgress => ProgressShare.HasValue && ProgressShare.Value > 0;
+
+        /// <summary>"12 / 20" (thousands grouped, fractions only where there are any).</summary>
+        [JsonIgnore]
+        public string ProgressText => !ProgressShare.HasValue ? null
+            : Number(ProgressValue.Value) + " / " + Number(ProgressMax.Value);
+
+        private static string Number(double value) =>
+            Math.Abs(value - Math.Round(value)) < 1e-6
+                ? Math.Round(value).ToString("N0", System.Globalization.CultureInfo.CurrentCulture)
+                : value.ToString("N1", System.Globalization.CultureInfo.CurrentCulture);
+
         [JsonIgnore]
         public bool Unlocked => UnlockedUtc.HasValue || UnlockedHardcoreUtc.HasValue;
 

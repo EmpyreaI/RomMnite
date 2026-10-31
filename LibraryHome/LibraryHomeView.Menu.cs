@@ -146,9 +146,9 @@ namespace RomM.LibraryHome
                 foreach (object entry in extra)
                     manage.Items.Add(entry);
             }
-            SyncFirst(manage);
-            menu.Items.Add(new Separator());
-            menu.Items.Add(manage);
+            OrderManage(manage);
+            // Right below Play (or Install).
+            menu.Items.Insert(1, manage);
         }
 
         /// <summary>The submenu gathering what manages a game (Edit, Hide, Uninstall...).</summary>
@@ -157,6 +157,91 @@ namespace RomM.LibraryHome
         /// <summary>Inside Manage, at its top: cloud saves and achievements (an extension's MenuSection).</summary>
         internal const string SyncHeader = "Sync";
         internal const string SyncSection = ManageHeader + "|" + SyncHeader;
+
+        // ---- Manage's order --------------------------------------------------------------------
+        //
+        // What is done most, first; what is done rarely (or cannot be undone), last:
+        //
+        //   Uninstall, Verify and repair files, Update, Choose what to launch
+        //   Sync (cloud saves, achievements)
+        //   Open install location, Create desktop shortcut, Calculate install size, Edit, Hide
+        //   Reinstall emulator, Remove from my library, Uninstall platform, Playnite's Remove
+        //
+        // with a line between the groups. Anything not named keeps its place among the third.
+
+        // Each entry: Playnite's resource keys for its words (its own items), and the words in
+        // English (ours, and Playnite's when untranslated), matched at the start of the header.
+        private static readonly Tuple<int, string[], string[]>[] s_manageOrder =
+        {
+            Tuple.Create(0, new[] { "LOCUninstallGame", "LOCUninstall" }, new[] { "Uninstall" }),
+            Tuple.Create(1, new string[0], new[] { "Verify and repair files" }),
+            Tuple.Create(2, new string[0], new[] { "Update" }),
+            Tuple.Create(3, new string[0], new[] { "Choose what to launch" }),
+            Tuple.Create(10, new string[0], new[] { SyncHeader }),
+            Tuple.Create(20, new[] { "LOCOpenGameLocation", "LOCOpenInstallLocation" }, new[] { "Open Game Location", "Open Install Location", "Open Installation Location", "Browse local files" }),
+            Tuple.Create(21, new[] { "LOCCreateDesktopShortcut" }, new[] { "Create Desktop Shortcut" }),
+            Tuple.Create(22, new[] { "LOCCalculateInstallSize", "LOCCalculateGameSize", "LOCCalculateGameSizes" }, new[] { "Calculate Install Size", "Calculate Game Size" }),
+            Tuple.Create(23, new[] { "LOCEditGame", "LOCEdit" }, new[] { "Edit" }),
+            Tuple.Create(24, new[] { "LOCHideGame", "LOCUnHideGame" }, new[] { "Hide", "Unhide", "Hide this game" }),
+            Tuple.Create(30, new string[0], new[] { "Reinstall emulator" }),
+            Tuple.Create(31, new string[0], new[] { global::RomM.RomM.RemoveMenuItem }),
+            Tuple.Create(32, new string[0], new[] { "Uninstall platform" }),
+            Tuple.Create(33, new[] { "LOCRemoveGame", "LOCRemove" }, new[] { "Remove" }),
+        };
+
+        private static string Plain(object header) =>
+            (header as string)?.Replace("_", "").Trim().TrimEnd('.', '\u2026').Trim() ?? "";
+
+        private static int ManageOrder(MenuItem item)
+        {
+            string words = Plain(item.Header);
+            if (words.Length == 0)
+                return 25;
+            foreach (var entry in s_manageOrder)
+            {
+                foreach (string key in entry.Item2)
+                {
+                    string text = Plain(ResourceProvider.GetString(key));
+                    if (text.Length > 0 && !text.StartsWith("<!") && string.Equals(text, words, StringComparison.CurrentCultureIgnoreCase))
+                        return entry.Item1;
+                }
+                foreach (string english in entry.Item3)
+                {
+                    // The whole words, or them with what they are about after ("Update (1.0.5)",
+                    // "Uninstall platform (PSP)"; so "Uninstall" is not "Uninstall platform").
+                    if (string.Equals(words, english, StringComparison.OrdinalIgnoreCase)
+                        || words.StartsWith(english + " (", StringComparison.OrdinalIgnoreCase))
+                        return entry.Item1;
+                }
+            }
+            return 25;
+        }
+
+        /// <summary>Manage's entries in the order above, a line between groups.</summary>
+        internal static void OrderManage(MenuItem manage)
+        {
+            if (manage == null)
+                return;
+            var entries = manage.Items.OfType<MenuItem>()
+                .Select((item, index) => new { item, index, rank = ManageOrder(item) })
+                .OrderBy(e => e.rank).ThenBy(e => e.index)
+                .ToList();
+            manage.Items.Clear();
+            int group = -1;
+            foreach (var e in entries)
+            {
+                if (e.item.Visibility != Visibility.Visible)
+                {
+                    manage.Items.Add(e.item);
+                    continue;
+                }
+                int g = e.rank / 10;
+                if (group >= 0 && g != group)
+                    manage.Items.Add(new Separator());
+                group = g;
+                manage.Items.Add(e.item);
+            }
+        }
 
         /// <summary>Puts Manage's Sync submenu first, with a line after it.</summary>
         internal static void SyncFirst(MenuItem manage)

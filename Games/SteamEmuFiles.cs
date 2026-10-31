@@ -43,6 +43,13 @@ namespace RomM.Games
         {
             public bool Achieved;
             public DateTime? WhenUtc;
+            /// <summary>
+            /// How far along a locked one is, where the emulator keeps it (gbe_fork's and
+            /// Goldberg's progress and max_progress, for achievements tied to a stat; CODEX's
+            /// CurProgress and MaxProgress): 0 and 0 when it does not.
+            /// </summary>
+            public double Progress;
+            public double MaxProgress;
         }
 
         /// <summary>An achievement of the list.</summary>
@@ -222,17 +229,20 @@ namespace RomM.Games
             }
 
             bool achieved = Truthy(Get("earned", "Achieved", "State", "HaveAchieved", "Unlocked"));
+            double have = 0, need = 0;
             if (!achieved)
             {
                 // Done by progress (CODEX for some games).
-                long.TryParse(Get("CurProgress", "progress"), out long have);
-                long.TryParse(Get("MaxProgress", "max_progress"), out long need);
+                double.TryParse(Get("CurProgress", "progress"), NumberStyles.Float, CultureInfo.InvariantCulture, out have);
+                double.TryParse(Get("MaxProgress", "max_progress"), NumberStyles.Float, CultureInfo.InvariantCulture, out need);
                 achieved = need > 0 && have >= need;
             }
             return new Unlock
             {
                 Achieved = achieved,
                 WhenUtc = achieved ? Time(Get("earned_time", "UnlockTime", "unlocktime", "unlock_time", "HaveAchievedTime", "HaveHaveAchievedTime", "Time")) : null,
+                Progress = achieved || need <= 0 ? 0 : Math.Max(0, have),
+                MaxProgress = achieved || need <= 0 ? 0 : need,
             };
         }
 

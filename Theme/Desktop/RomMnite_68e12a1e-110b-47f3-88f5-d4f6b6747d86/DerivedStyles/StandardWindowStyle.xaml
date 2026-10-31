@@ -14,7 +14,7 @@
         <Setter Property="TextOptions.TextRenderingMode" Value="Auto" />
         <Setter Property="WindowChrome.WindowChrome">
             <Setter.Value>
-                <WindowChrome CaptionHeight="24" CornerRadius="0" ResizeBorderThickness="4"
+                <WindowChrome CaptionHeight="44" CornerRadius="0" ResizeBorderThickness="4"
                               NonClientFrameEdges ="None" UseAeroCaptionButtons="False" GlassFrameThickness="0"/>
             </Setter.Value>
         </Setter>
@@ -29,15 +29,15 @@
                                 BorderThickness="{TemplateBinding BorderThickness}"
                                 Background="{TemplateBinding Background}">
                             <Grid>
-                                <ContentPresenter Margin="0,24,0,0"/>
+                                <ContentPresenter Margin="0,44,0,0"/>
                                 <DockPanel DockPanel.Dock="Top" LastChildFill="False">
                                     <DockPanel DockPanel.Dock="Top" LastChildFill="False">
                                         <TextBlock Text="{TemplateBinding Title}" DockPanel.Dock="Left" 
-                                                   Margin="16,4,16,0" VerticalAlignment="Center"
+                                                   Margin="20,0,16,0" VerticalAlignment="Center" Height="44" Padding="0,13,0,0"
                                                    FontSize="{DynamicResource FontSize}" FontWeight="Bold"
                                                    Style="{DynamicResource BaseTextBlockStyle}" x:Name="PART_TextTitle" />
                                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" 
-                                                    Margin="0,4,4,0">
+                                                    Margin="0,8,10,0" VerticalAlignment="Top">
                                             <Button Style="{DynamicResource PillSmallNoBgButton}" Margin="0,0,4,0"
                                                     FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                                     Content="&#xe108;" x:Name="PART_ButtonMinimize"

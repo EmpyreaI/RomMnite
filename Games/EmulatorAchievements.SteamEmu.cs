@@ -225,11 +225,16 @@ namespace RomM.Games
                     Percent = entry.Percent,
                 });
             }
+            set.ProgressRead = file != null;
             foreach (KeyValuePair<string, SteamEmuFiles.Unlock> unlock in unlocks)
             {
                 // By the list's spelling (some emulators write the names in another case).
-                if (unlock.Value.Achieved && ids.TryGetValue(unlock.Key, out string id))
+                if (!ids.TryGetValue(unlock.Key, out string id))
+                    continue;
+                if (unlock.Value.Achieved)
                     set.Unlocked[id] = unlock.Value.WhenUtc;
+                else if (unlock.Value.MaxProgress > 0)
+                    set.Progress[id] = new ProgressMark { Have = Math.Min(unlock.Value.Progress, unlock.Value.MaxProgress), Need = unlock.Value.MaxProgress };
             }
             return set;
         }

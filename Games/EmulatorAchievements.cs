@@ -66,7 +66,20 @@ namespace RomM.Games
             public string SetId { get; set; }     // NPWR... or the title id
             public List<Definition> Definitions { get; set; } = new List<Definition>();
             public Dictionary<string, DateTime> Unlocked { get; set; } = new Dictionary<string, DateTime>();
+            /// <summary>How far along the locked ones are, where the emulator keeps it (see ProgressMark).</summary>
+            public Dictionary<string, ProgressMark> Progress { get; set; } = new Dictionary<string, ProgressMark>();
             public DateTime UpdatedUtc { get; set; }
+        }
+
+        /// <summary>
+        /// A locked achievement's progress, as a Steam emulator keeps it for achievements tied to
+        /// a stat (gbe_fork's and Goldberg's progress and max_progress, CODEX's CurProgress and
+        /// MaxProgress): RetroAchievements, RPCS3 and Xenia keep none.
+        /// </summary>
+        public sealed class ProgressMark
+        {
+            public double Have { get; set; }
+            public double Need { get; set; }
         }
 
         // A set as the emulator has it now.
@@ -76,6 +89,23 @@ namespace RomM.Games
             public string SetId;
             public List<Definition> Definitions = new List<Definition>();
             public Dictionary<string, DateTime?> Unlocked = new Dictionary<string, DateTime?>();
+            public Dictionary<string, ProgressMark> Progress = new Dictionary<string, ProgressMark>();
+            public bool ProgressRead;   // the emulator's file was read (its progress, even none, is current)
+        }
+
+        // The set's progress, the locked ones' only, when it differs from the record's (null when
+        // it does not, or was not read).
+        private static Dictionary<string, ProgressMark> NewProgress(EmulatorSet set, Record record)
+        {
+            if (set == null || !set.ProgressRead)
+                return null;
+            var now = set.Progress
+                .Where(p => !record.Unlocked.ContainsKey(p.Key) && !set.Unlocked.ContainsKey(p.Key))
+                .ToDictionary(p => p.Key, p => p.Value);
+            Dictionary<string, ProgressMark> before = record.Progress ?? new Dictionary<string, ProgressMark>();
+            bool same = before.Count == now.Count && now.All(p => before.TryGetValue(p.Key, out ProgressMark b)
+                && Math.Abs(b.Have - p.Value.Have) < 1e-9 && Math.Abs(b.Need - p.Value.Need) < 1e-9);
+            return same ? null : now;
         }
 
         private sealed class Source
@@ -406,12 +436,32 @@ namespace RomM.Games
                     // the overlay and the game's page show them while it is still being played.
                     if (now.Count > 0)
                         KeepLive(watch.Game, set, now);
+                    else
+                        KeepProgress(watch.Game, set);
                 }
             }
             catch (Exception ex)
             {
                 s_log.Debug($"[Achievements] Could not read {watch.Game.Name}'s unlocks: {ex.Message}");
             }
+        }
+
+        // Progress made during play (no unlock): into the account's record and shown, so the
+        // overlay's bars move while the game is played.
+        private void KeepProgress(Game game, EmulatorSet set)
+        {
+            string account = _accountFolder;
+            if (account == null || !set.ProgressRead)
+                return;
+            Record record = LoadRecord(account, game.Id);
+            if (record == null || record.Definitions.Count == 0)
+                return;
+            Dictionary<string, ProgressMark> progress = NewProgress(set, record);
+            if (progress == null || account != _accountFolder)
+                return;
+            record.Progress = progress;
+            SaveRecord(account, game.Id, record);
+            Show(game, record);
         }
 
         // Unlocks seen during play put into the account's record and shown; the note on the
@@ -431,6 +481,7 @@ namespace RomM.Games
                 if (!record.Unlocked.ContainsKey(unlock.Key))
                     record.Unlocked[unlock.Key] = unlock.Value;
             }
+            record.Progress = NewProgress(set, record) ?? record.Progress;
             record.UpdatedUtc = DateTime.UtcNow;
             if (account != _accountFolder)
                 return;
@@ -483,6 +534,8 @@ namespace RomM.Games
                             added++;
                         }
                     }
+                    // How far along the rest are: this session's player's.
+                    record.Progress = NewProgress(set, record) ?? record.Progress;
                     record.UpdatedUtc = DateTime.UtcNow;
                     if (account != _accountFolder)
                         return;   // signed in as someone else meanwhile
@@ -612,6 +665,12 @@ namespace RomM.Games
                         changed = true;
                     }
                 }
+                Dictionary<string, ProgressMark> progress = NewProgress(set, record);
+                if (progress != null)
+                {
+                    record.Progress = progress;
+                    changed = true;
+                }
             }
             if (changed && account == _accountFolder)
             {
@@ -647,6 +706,9 @@ namespace RomM.Games
                 bool hidden = definition.Hidden && !unlocked;
                 string icon = IconFile(icons, record.Kind, definition.Id);
                 string gray = IconFile(icons, record.Kind, definition.Id, gray: true);
+                ProgressMark mark = null;
+                if (!unlocked && record.Progress != null)
+                    record.Progress.TryGetValue(definition.Id, out mark);
                 items.Add(new AchievementItem
                 {
                     Title = hidden ? (trophies ? "Hidden trophy" : "Secret achievement") : definition.Title,
@@ -656,6 +718,8 @@ namespace RomM.Games
                     BadgeLockedUrl = !hidden && File.Exists(gray) ? gray : null,
                     Rarity = definition.Percent,
                     UnlockedUtc = unlocked ? when : (DateTime?)null,
+                    ProgressValue = mark?.Have,
+                    ProgressMax = mark?.Need,
                     Order = definition.Order,
                     Hidden = hidden,
                 });
@@ -800,6 +864,8 @@ namespace RomM.Games
                 SetId = basis.SetId,
                 Definitions = basis.Definitions,
                 UpdatedUtc = DateTime.UtcNow,
+                // Progress is this computer's (the emulator's file is here): the local record's.
+                Progress = local?.Progress != null && local.Progress.Count > 0 ? local.Progress : (remote?.Progress ?? new Dictionary<string, ProgressMark>()),
             };
             foreach (Record side in new[] { local, remote })
             {

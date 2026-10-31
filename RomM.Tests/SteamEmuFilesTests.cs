@@ -14,6 +14,31 @@ namespace RomM.Tests
             SteamEmuFiles.Parse(name, Encoding.UTF8.GetBytes(text));
 
         [Fact]
+        public void Gbe_progress_kept_for_locked_ones()
+        {
+            var unlocks = Parse("achievements.json",
+                "{ \"KILL_100\": { \"earned\": false, \"earned_time\": 0, \"progress\": 37, \"max_progress\": 100 }, " +
+                "\"KILL_10\": { \"earned\": true, \"earned_time\": 1700000000, \"progress\": 10, \"max_progress\": 10 }, " +
+                "\"PLAIN\": { \"earned\": false, \"earned_time\": 0 } }");
+            Assert.False(unlocks["KILL_100"].Achieved);
+            Assert.Equal(37, unlocks["KILL_100"].Progress);
+            Assert.Equal(100, unlocks["KILL_100"].MaxProgress);
+            Assert.True(unlocks["KILL_10"].Achieved);
+            Assert.Equal(0, unlocks["KILL_10"].MaxProgress);
+            Assert.Equal(0, unlocks["PLAIN"].MaxProgress);
+        }
+
+        [Fact]
+        public void Codex_progress_reaching_its_end_is_an_unlock()
+        {
+            var unlocks = Parse("achievements.ini",
+                "[ACH_A]\nAchieved=0\nCurProgress=4\nMaxProgress=5\n[ACH_B]\nAchieved=0\nCurProgress=5\nMaxProgress=5\n");
+            Assert.False(unlocks["ACH_A"].Achieved);
+            Assert.Equal(4, unlocks["ACH_A"].Progress);
+            Assert.True(unlocks["ACH_B"].Achieved);
+        }
+
+        [Fact]
         public void Gbe_and_Goldberg_json()
         {
             var unlocks = Parse("achievements.json",

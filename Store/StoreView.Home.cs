@@ -71,6 +71,7 @@ namespace RomM.Store
 
         private void ShowHome()
         {
+            StoreImages.NewPage();   // this page's pictures before those still waiting from others
             ShowBrowse();
             HideCategory();
             _heading.Text = "Home";

@@ -204,6 +204,7 @@ namespace RomM.LibraryHome
         private void Build()
         {
             _stale = false;
+            Store.StoreImages.NewPage();   // Home's pictures before those still waiting from the Store
             if (_model.LibraryPage == "Downloads")
             {
                 BuildDownloads();

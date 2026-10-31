@@ -64,6 +64,9 @@ namespace RomM.Overlay
         private bool? _trulyExclusive;
         private volatile bool _running;
         private OverlayWindow _window;
+        // Streaming, and the stream can be ended without closing Playnite (End stream offered):
+        // Quit game ends it too, once the game has closed.
+        private volatile bool _streamEndable;
         private bool _suspended;
         private IntPtr _keyboardHook = IntPtr.Zero;
         private LowLevelKeyboardProc _hookProc;   // kept alive while hooked
@@ -330,7 +333,10 @@ namespace RomM.Overlay
                 Ui(() =>
                 {
                     if (_window == window)
+                    {
+                        _streamEndable = true;
                         window.OfferEndStream();
+                    }
                 });
             });
         }
@@ -346,8 +352,41 @@ namespace RomM.Overlay
                 string problem = await sunshine.EndStreamAsync().ConfigureAwait(false);
                 if (problem != null)
                     s_log.Warn($"[Sunshine] Could not end the stream: {problem}");
+                if (problem == null)
+                    _streamEndable = false;
                 Ui(() => window.StreamEnded(problem));
             });
+        }
+
+        // After Quit game: the stream ended too, when it still runs. Not when the game would not
+        // close (the player is still at it), nor when Sunshine started the game or Playnite
+        // (never offered then: its "close app" would close Playnite as well, and a stream of the
+        // game Sunshine started ends with it by itself).
+        private void EndStreamAfterQuit(string name)
+        {
+            var sunshine = _plugin.Sunshine;
+            if (sunshine == null)
+                return;
+            try
+            {
+                bool? streaming = sunshine.StreamingAsync().GetAwaiter().GetResult();
+                if (streaming != true)
+                    return;
+                string problem = sunshine.EndStreamAsync().GetAwaiter().GetResult();
+                if (problem != null)
+                {
+                    s_log.Warn($"[Sunshine] {name}: quit, but the stream could not be ended: {problem}");
+                    Toast.Show("Stream still running", "End it from Moonlight or Sunshine.", glyph: "\uE7BA");
+                }
+                else
+                {
+                    s_log.Info($"[Sunshine] {name}: quit, and the stream ended.");
+                }
+            }
+            catch (Exception ex)
+            {
+                s_log.Warn($"[Sunshine] Could not end the stream after quitting: {ex.Message}");
+            }
         }
 
         // Sunshine as a parent of the process (up to a few levels), by name; null when not.
@@ -499,6 +538,7 @@ namespace RomM.Overlay
                 _window.ResumeRequested += CloseWindow;
                 _window.QuitRequested += Quit;
                 _window.EndStreamRequested += EndStream;
+                _streamEndable = false;   // looked at again for this opening
                 OfferEndStreamIfStreaming(_window);
                 _window.Closed += (s, e) =>
                 {
@@ -618,6 +658,7 @@ namespace RomM.Overlay
             int pid = QuitProcessId;
             string name = _game?.Name;
             TimeSpan grace = _isPc ? PcGrace : EmulatorGrace;
+            bool endStream = _streamEndable;
             CloseWindow();
             Resume();
             if (pid <= 0)
@@ -625,7 +666,17 @@ namespace RomM.Overlay
                 Toast.Show("Can't quit from here", $"Quit {name ?? "the game"} from its own menu.", glyph: "\uE7BA");
                 return;
             }
-            CloseGame(pid, name, grace);
+            if (!endStream)
+            {
+                CloseGame(pid, name, grace);
+                return;
+            }
+            // Streaming: the game closed first (so it saves), then the stream.
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                if (CloseGameAndWait(pid, name, grace))
+                    EndStreamAfterQuit(name);
+            });
         }
 
         /// <summary>

@@ -354,14 +354,46 @@ namespace RomM.AchievementViews
             {
                 case AchievementView.Button: return BuildButton();
                 case AchievementView.ProgressBar: return BuildProgress();
-                case AchievementView.CompactList: return BuildCompact(_data.Items.OrderByDescending(i => i.Unlocked).ThenBy(i => i.Hidden).ThenByDescending(i => i.When).ThenBy(i => i.Order));
+                case AchievementView.CompactList: return BuildCompact(_data.Items.Where(i => i.Unlocked).OrderByDescending(i => i.When).Concat(Locked(_data.Items)));
                 case AchievementView.CompactUnlocked: return BuildCompact(_data.Items.Where(i => i.Unlocked).OrderByDescending(i => i.When));
-                case AchievementView.CompactLocked: return BuildCompact(_data.Items.Where(i => !i.Unlocked).OrderBy(i => i.Hidden).ThenBy(i => i.Order));
+                case AchievementView.CompactLocked: return BuildCompact(Locked(_data.Items));
                 case AchievementView.UserStats: return BuildStats(_data);
                 case AchievementView.List: return BuildList(_data);
                 case AchievementView.Chart: return BuildChart(_data);
                 default: return null;
             }
+        }
+
+        /// <summary>
+        /// The locked ones, closest to unlocking first (those with progress, furthest along
+        /// first), then the rest in the game's order, the hidden last.
+        /// </summary>
+        internal static IEnumerable<AchievementItem> Locked(IEnumerable<AchievementItem> items) =>
+            items.Where(i => !i.Unlocked)
+                .OrderByDescending(i => i.InProgress)
+                .ThenByDescending(i => i.ProgressShare ?? 0)
+                .ThenBy(i => i.Hidden)
+                .ThenBy(i => i.Order);
+
+        /// <summary>A thin bar of how far along a locked one is, with "12 / 20" beside it.</summary>
+        internal static FrameworkElement ProgressLine(AchievementItem item, Brush fill, Brush track, Brush words, double fontSize)
+        {
+            var line = new Grid { Margin = new Thickness(0, 5, 0, 0) };
+            line.ColumnDefinitions.Add(new ColumnDefinition());
+            line.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            double share = item.ProgressShare ?? 0;
+            var bar = new Grid { Height = 4, VerticalAlignment = VerticalAlignment.Center, MaxWidth = 260, HorizontalAlignment = HorizontalAlignment.Stretch };
+            bar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(Math.Max(share, 0.0001), GridUnitType.Star) });
+            bar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(Math.Max(1 - share, 0.0001), GridUnitType.Star) });
+            bar.Children.Add(new Border { Background = fill, CornerRadius = new CornerRadius(2, 0, 0, 2) });
+            var rest = new Border { Background = track, CornerRadius = new CornerRadius(0, 2, 2, 0) };
+            Grid.SetColumn(rest, 1);
+            bar.Children.Add(rest);
+            line.Children.Add(bar);
+            var count = new TextBlock { Text = item.ProgressText ?? "", FontSize = fontSize, Foreground = words, Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+            Grid.SetColumn(count, 1);
+            line.Children.Add(count);
+            return line;
         }
 
         // ---- Pieces ---------------------------------------------------------------------------
@@ -459,6 +491,7 @@ namespace RomM.AchievementViews
         {
             string state = item.Unlocked
                 ? "Unlocked " + item.When.Value.ToLocalTime().ToString("d MMM yyyy", CultureInfo.CurrentCulture) + (item.UnlockedHardcoreUtc.HasValue ? " (hardcore)" : "")
+                : item.ProgressShare.HasValue ? "Locked \u00B7 " + item.ProgressText
                 : "Locked";
             return $"{item.Title}\n{item.Description}\n{Worth(item)}{state}";
         }
@@ -606,7 +639,7 @@ namespace RomM.AchievementViews
         private UIElement BuildList(GameAchievements data)
         {
             var list = new StackPanel();
-            foreach (AchievementItem item in data.Items.OrderByDescending(i => i.Unlocked).ThenBy(i => i.Hidden).ThenByDescending(i => i.When).ThenBy(i => i.Order))
+            foreach (AchievementItem item in data.Items.Where(i => i.Unlocked).OrderByDescending(i => i.When).Concat(Locked(data.Items)))
             {
                 var row = new Grid { Margin = new Thickness(0, 0, 0, 4) };
                 row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -622,6 +655,11 @@ namespace RomM.AchievementViews
                 var desc = Text(item.Description, 12);
                 desc.Opacity = 0.75;
                 words.Children.Add(desc);
+                if (item.ProgressShare.HasValue)
+                {
+                    var muted = new SolidColorBrush(Color.FromArgb(0xB0, 0xFF, 0xFF, 0xFF));
+                    words.Children.Add(ProgressLine(item, Accent, new SolidColorBrush(Color.FromArgb(0x30, 0xFF, 0xFF, 0xFF)), muted, 11));
+                }
                 Grid.SetColumn(words, 1);
                 row.Children.Add(words);
 
@@ -649,7 +687,7 @@ namespace RomM.AchievementViews
                     Background = new SolidColorBrush(Color.FromArgb(item.Unlocked ? (byte)0x30 : (byte)0x18, 0, 0, 0)),
                     Padding = new Thickness(8),
                     Margin = new Thickness(0, 0, 0, 4),
-                    Opacity = item.Unlocked ? 1 : 0.8,
+                    Opacity = item.Unlocked || item.InProgress ? 1 : 0.8,
                     Child = row,
                 });
             }

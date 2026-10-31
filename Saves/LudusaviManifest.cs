@@ -45,6 +45,11 @@ namespace RomM.Saves
             public List<string> BasePaths = new List<string>();
             /// <summary>The folder names a store installs it under (installDir).</summary>
             public List<string> InstallDirs = new List<string>();
+            /// <summary>
+            /// What a store starts it with, for Windows ("launch:", '/'-separated below &lt;base&gt;):
+            /// Steam's launch options, so at times a launcher rather than the game itself.
+            /// </summary>
+            public List<string> LaunchPaths = new List<string>();
         }
 
         /// <summary>The game's entry, or null when the manifest has no such title. Kept while the file is unchanged.</summary>
@@ -59,23 +64,38 @@ namespace RomM.Saves
                 if (s_cache.TryGetValue(key, out var kept) && kept.Key == stamp)
                     return kept.Value;
             }
-            Entry entry = Read(File.ReadLines(manifest), title);
+            // The title as written, else in any case (the library has "METAL GEAR SOLID: Peace
+            // Walker - ...", the manifest an entry in each case, which may differ: the exact one first).
+            Entry entry = Read(File.ReadLines(manifest), title) ?? Read(File.ReadLines(manifest), title, ignoreCase: true);
             lock (s_lock)
                 s_cache[key] = new KeyValuePair<DateTime, Entry>(stamp, entry);
             return entry;
         }
 
         /// <summary>The entry from the manifest's lines (separate for testing).</summary>
-        internal static Entry Read(IEnumerable<string> lines, string title)
+        internal static Entry Read(IEnumerable<string> lines, string title, bool ignoreCase = false)
         {
             Entry entry = null;
             string section = null;       // the entry's second-level key: files, installDir ...
             string path = null;          // the files: path being read
             List<string> pathLines = null;
+            bool launch = false;         // the path being read is a launch: one
             Action endPath = () =>
             {
-                if (entry != null && path != null && path.StartsWith("<base>/", StringComparison.Ordinal) && ForWindows(pathLines))
-                    entry.BasePaths.Add(path.Substring("<base>/".Length));
+                if (entry != null && path != null && path.StartsWith("<base>/", StringComparison.Ordinal))
+                {
+                    if (launch)
+                    {
+                        // Its conditions as "- os: windows" items: none naming a system, or one naming Windows.
+                        bool names = pathLines.Any(l => l.Contains("os: "));
+                        if (!names || pathLines.Any(l => l.Contains("os: windows")))
+                            entry.LaunchPaths.Add(path.Substring("<base>/".Length));
+                    }
+                    else if (ForWindows(pathLines))
+                    {
+                        entry.BasePaths.Add(path.Substring("<base>/".Length));
+                    }
+                }
                 path = null;
                 pathLines = null;
             };
@@ -89,7 +109,7 @@ namespace RomM.Saves
                 {
                     if (entry != null)
                         break;   // the next game
-                    if (string.Equals(Key(line), title, StringComparison.Ordinal))
+                    if (string.Equals(Key(line), title, ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
                         entry = new Entry();
                     continue;
                 }
@@ -104,10 +124,11 @@ namespace RomM.Saves
                 if (indent == 4)
                 {
                     endPath();
-                    if (section == "files")
+                    if (section == "files" || section == "launch")
                     {
                         path = Key(line);
                         pathLines = new List<string>();
+                        launch = section == "launch";
                     }
                     else if (section == "installDir")
                     {

@@ -74,6 +74,7 @@ namespace RomM.Store
 
         private void ShowDirectory(string which)
         {
+            StoreImages.NewPage();   // this page's pictures before those still waiting from others
             if (Host.Length == 0)
                 return;
             if (_platforms.Items.Count == 0)

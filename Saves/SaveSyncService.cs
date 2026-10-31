@@ -475,6 +475,12 @@ namespace RomM.Saves
                 outcome.Failed++;
                 outcome.Message = "RomM did not answer in time.";
             }
+            catch (System.IO.IOException ex) when (!allowDownload && InUse(ex))
+            {
+                // While the game runs: its emulator holds the save open (PCSX2 a folder card's
+                // files). Not a failure: it is synced when the game closes, as always.
+                Logger.Info($"[SaveSync] {game?.Name}: its save is open in the emulator while it runs; synced when the game closes.");
+            }
             catch (Exception ex)
             {
                 Logger.Error(ex, $"[SaveSync] Unexpected failure syncing {game?.Name}.");
@@ -483,6 +489,14 @@ namespace RomM.Saves
             }
 
             return outcome;
+        }
+
+        // Another program has the file open without letting it be read (ERROR_SHARING_VIOLATION,
+        // ERROR_LOCK_VIOLATION).
+        private static bool InUse(System.IO.IOException ex)
+        {
+            int code = ex.HResult & 0xFFFF;
+            return code == 32 || code == 33;
         }
 
         #region Negotiate / session

@@ -20,6 +20,9 @@ namespace RomM.Store
     ///
     /// A picture element keeps whatever it was showing until its new picture has arrived, so
     /// switching pictures never passes through an empty frame.
+    ///
+    /// The page opened last goes first (NewPage): its pictures take the next free download slots
+    /// ahead of any still waiting from the pages before it.
     /// </summary>
     internal static class StoreImages
     {
@@ -108,7 +111,7 @@ namespace RomM.Store
             if (KeptArt(url) != null)
                 return true;
             await s_gate.Task.ConfigureAwait(false);
-            await TakeSlot(Always).ConfigureAwait(false);
+            await TakeSlot(Always, 0).ConfigureAwait(false);
             try
             {
                 byte[] bytes = await Fetch(url, folder).ConfigureAwait(false);
@@ -122,7 +125,7 @@ namespace RomM.Store
             finally
             {
                 Interlocked.Decrement(ref s_backgroundRunning);
-                s_slots.Release();
+                ReleaseSlot();
             }
         }
 
@@ -132,6 +135,82 @@ namespace RomM.Store
         // Pictures on screen waiting for a slot: the background takes none while there are any.
         private static int s_foregroundWaiting;
 
+        // ---- Slots, newest page first ------------------------------------------------------------
+        //
+        // Six downloads at a time. A picture waiting for one is stamped with the page it was asked
+        // for (NewPage: each page the Store or the library opens); a freed slot goes to the newest
+        // page's first-asked picture, so a page just opened is not queued behind the dozens of
+        // pictures the pages before it asked for (they still come, after it).
+
+        private const int SlotCount = 6;
+        private static int s_freeSlots = SlotCount;
+        private static long s_pageNumber;
+        private static long s_waitNumber;
+
+        private sealed class Waiter
+        {
+            public long Page;
+            public long Order;
+            public TaskCompletionSource<bool> Ready;
+        }
+
+        private static readonly List<Waiter> s_waiters = new List<Waiter>();
+
+        /// <summary>
+        /// A page is being opened: the pictures asked for from now on go before every picture
+        /// still waiting from the pages before it. Any thread.
+        /// </summary>
+        public static void NewPage() => Interlocked.Increment(ref s_pageNumber);
+
+        private static long CurrentPage => Interlocked.Read(ref s_pageNumber);
+
+        private static Task WaitForSlot(long page)
+        {
+            lock (s_waiters)
+            {
+                if (s_freeSlots > 0 && s_waiters.Count == 0)
+                {
+                    s_freeSlots--;
+                    return Task.FromResult(true);
+                }
+                var waiter = new Waiter { Page = page, Order = ++s_waitNumber, Ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously) };
+                s_waiters.Add(waiter);
+                return waiter.Ready.Task;
+            }
+        }
+
+        // A slot now, only if one is free and nothing is waiting (the background lane).
+        private static bool TrySlotNow()
+        {
+            lock (s_waiters)
+            {
+                if (s_freeSlots > 0 && s_waiters.Count == 0)
+                {
+                    s_freeSlots--;
+                    return true;
+                }
+                return false;
+            }
+        }
+
+        private static void ReleaseSlot()
+        {
+            Waiter next = null;
+            lock (s_waiters)
+            {
+                foreach (Waiter w in s_waiters)
+                {
+                    if (next == null || w.Page > next.Page || (w.Page == next.Page && w.Order < next.Order))
+                        next = w;
+                }
+                if (next != null)
+                    s_waiters.Remove(next);
+                else
+                    s_freeSlots++;
+            }
+            next?.Ready.TrySetResult(true);
+        }
+
         /// <summary>
         /// A download slot. What is on screen first: it queues for a slot as soon as it is asked
         /// for. Background pictures (<paramref name="background"/> true, asked each time round,
@@ -140,7 +219,7 @@ namespace RomM.Store
         /// way (Foreground), and fewer than <see cref="BackgroundLimit"/> are already downloading.
         /// Whether the slot was taken as background (it counts toward the limit until released).
         /// </summary>
-        private static async Task<bool> TakeSlot(Func<bool> background)
+        private static async Task<bool> TakeSlot(Func<bool> background, long page)
         {
             while (true)
             {
@@ -149,7 +228,7 @@ namespace RomM.Store
                     Interlocked.Increment(ref s_foregroundWaiting);
                     try
                     {
-                        await s_slots.WaitAsync().ConfigureAwait(false);
+                        await WaitForSlot(page).ConfigureAwait(false);
                     }
                     finally
                     {
@@ -159,12 +238,12 @@ namespace RomM.Store
                 }
                 if (Volatile.Read(ref s_foregroundWaiting) == 0 && Foreground.Quiet
                     && Volatile.Read(ref s_backgroundRunning) < BackgroundLimit
-                    && await s_slots.WaitAsync(0).ConfigureAwait(false))
+                    && TrySlotNow())
                 {
                     if (Interlocked.Increment(ref s_backgroundRunning) <= BackgroundLimit)
                         return true;
                     Interlocked.Decrement(ref s_backgroundRunning);
-                    s_slots.Release();
+                    ReleaseSlot();
                 }
                 await Task.Delay(200).ConfigureAwait(false);
             }
@@ -172,7 +251,6 @@ namespace RomM.Store
 
         private static readonly ILogger s_log = LogManager.GetLogger();
         private static readonly HttpClient s_http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        private static readonly SemaphoreSlim s_slots = new SemaphoreSlim(6);
         private static readonly Dictionary<string, ImageSource> s_cache = new Dictionary<string, ImageSource>();
         private static readonly object s_lock = new object();
 
@@ -297,14 +375,15 @@ namespace RomM.Store
             if (critical)
                 Interlocked.Increment(ref s_criticalAsked);
 
+            long page = CurrentPage;
             Task.Run(async () =>
             {
                 ImageSource image = null;
                 try
                 {
-                    image = await Load(url, decodeWidth, keepIn, background).ConfigureAwait(false);
+                    image = await Load(url, decodeWidth, keepIn, background, page).ConfigureAwait(false);
                     if (image == null && !string.IsNullOrEmpty(fallback) && fallback != url)
-                        image = await Load(fallback, decodeWidth, keepIn, background).ConfigureAwait(false);
+                        image = await Load(fallback, decodeWidth, keepIn, background, page).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -418,7 +497,7 @@ namespace RomM.Store
             return bitmap;
         }
 
-        private static async Task<ImageSource> Load(string url, int decodeWidth, string keepIn, Func<bool> background)
+        private static async Task<ImageSource> Load(string url, int decodeWidth, string keepIn, Func<bool> background, long page)
         {
             // A library game's artwork already on disk: read from there, no slot needed.
             if (keepIn == null)
@@ -438,8 +517,22 @@ namespace RomM.Store
                 else if (ArtFolder != null && s_artUrls.Contains(url))
                     keepIn = ArtFolder;   // one of the library's: kept once downloaded
             }
+            // A picture already on this computer (an achievement's icon, a library cover): read
+            // at once, not queued behind downloads for a slot, nor held while the Store gets ready.
+            if (!url.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    return Decode(File.ReadAllBytes(url), decodeWidth);
+                }
+                catch (Exception ex)
+                {
+                    s_log.Debug($"[Store] Could not read picture {url}: {ex.Message}");
+                    return null;
+                }
+            }
             await s_gate.Task.ConfigureAwait(false);
-            bool inBackground = await TakeSlot(background).ConfigureAwait(false);
+            bool inBackground = await TakeSlot(background, page).ConfigureAwait(false);
             try
             {
                 for (int attempt = 1; attempt <= 2; attempt++)
@@ -463,7 +556,7 @@ namespace RomM.Store
             {
                 if (inBackground)
                     Interlocked.Decrement(ref s_backgroundRunning);
-                s_slots.Release();
+                ReleaseSlot();
             }
         }
     }

@@ -92,6 +92,7 @@
     <Compile Include="..\Games\SteamDescriptions.cs" Link="Linked\Games\SteamDescriptions.cs" />
     <Compile Include="..\Games\LaunchFiles.cs" Link="Linked\Games\LaunchFiles.cs" />
     <Compile Include="..\Saves\LudusaviTitles.cs" Link="Linked\Saves\LudusaviTitles.cs" />
+    <Compile Include="..\Account\SettingsFile.cs" Link="Linked\Account\SettingsFile.cs" />
     <Compile Include="..\Saves\Handlers\AzaharSaveHandler.cs" Link="Linked\Saves\Handlers\AzaharSaveHandler.cs" />
     <Compile Include="..\Saves\Handlers\CemuSaveHandler.cs" Link="Linked\Saves\Handlers\CemuSaveHandler.cs" />
     <Compile Include="..\Saves\Handlers\Vita3KSaveHandler.cs" Link="Linked\Saves\Handlers\Vita3KSaveHandler.cs" />

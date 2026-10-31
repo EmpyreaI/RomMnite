@@ -483,6 +483,7 @@ namespace RomM.Overlay
             _buttons.Remove(_endStream);
             _buttons.Insert(_buttons.IndexOf(_quitButton), _endStream);
             _actions.Children.Insert(_actions.Children.IndexOf(_quitButton), _endStream);
+            _quitButton.ToolTip = "Closes the game, then ends the stream.";
         }
 
         /// <summary>The stream ended (problem null) or could not be: said on the button.</summary>
@@ -698,8 +699,23 @@ namespace RomM.Overlay
             bar.Children.Add(rest);
             _achievements.Children.Add(bar);
 
-            IEnumerable<AchievementItem> ordered = set.Items.Where(i => i.Unlocked).OrderByDescending(i => i.When)
-                .Concat(set.Items.Where(i => !i.Unlocked).OrderBy(i => i.Hidden).ThenBy(i => i.Order));
+            // Closest to unlocking first (those with progress, furthest along first), then the
+            // unlocked, newest first, then the rest of the locked in the game's order. With a
+            // heading over each group when some are in progress.
+            List<AchievementItem> close = set.Items.Where(i => i.InProgress)
+                .OrderByDescending(i => i.ProgressShare ?? 0).ThenBy(i => i.Order).ToList();
+            List<AchievementItem> unlocked = set.Items.Where(i => i.Unlocked).OrderByDescending(i => i.When).ToList();
+            List<AchievementItem> stillLocked = AchievementViews.AchievementControl.Locked(set.Items).Where(i => !i.InProgress).ToList();
+            var headings = new Dictionary<AchievementItem, string>();
+            if (close.Count > 0)
+            {
+                headings[close[0]] = "Almost there";
+                if (unlocked.Count > 0)
+                    headings[unlocked[0]] = "Unlocked";
+                if (stillLocked.Count > 0)
+                    headings[stillLocked[0]] = "Locked";
+            }
+            IEnumerable<AchievementItem> ordered = close.Concat(unlocked).Concat(stillLocked);
 
             // How rare each is (Rarity): the share of players (Steam's), or for RetroAchievements,
             // its players compared with the set's most earned achievement's.
@@ -709,6 +725,12 @@ namespace RomM.Overlay
             List<double> scores = set.Items.Select(score).Where(v => v.HasValue).Select(v => v.Value).ToList();
             foreach (AchievementItem item in ordered)
             {
+                if (headings.TryGetValue(item, out string heading))
+                {
+                    var label = Words(heading.ToUpperInvariant(), 11, FontWeights.SemiBold, Muted);
+                    label.Margin = new Thickness(10, _rows.Count == 0 ? 0 : 12, 0, 6);
+                    _achievements.Children.Add(label);
+                }
                 double? rarity = score(item);
                 var content = new StackPanel();
                 content.Children.Add(Row(item, rarity));
@@ -772,8 +794,8 @@ namespace RomM.Overlay
                 };
             DockPanel.SetDock(badgeFrame, Dock.Left);
             row.Children.Add(badgeFrame);
-            // The words dimmed while locked (the badge's glow is not).
-            var dimmed = new DockPanel { Opacity = item.Unlocked ? 1.0 : 0.5 };
+            // The words dimmed while locked (the badge's glow is not); less so with progress made.
+            var dimmed = new DockPanel { Opacity = item.Unlocked ? 1.0 : item.InProgress ? 0.85 : 0.5 };
             row.Children.Add(dimmed);
             row = dimmed;
 
@@ -800,6 +822,9 @@ namespace RomM.Overlay
                 detail += (detail.Length > 0 ? "   ·   " : "") + $"{item.Rarity.Value:0.#}% of players";
             if (detail.Length > 0)
                 words.Children.Add(Words(detail, 13, FontWeights.Normal, Muted));
+            // How far along a locked one is, where the game's emulator keeps it.
+            if (item.ProgressShare.HasValue)
+                words.Children.Add(AchievementViews.AchievementControl.ProgressLine(item, Blue, Edge, Muted, 12));
             row.Children.Add(words);
             return outer;
         }
